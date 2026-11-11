@@ -7,7 +7,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/openframe/openframe/internal/version"
+	"github.com/matthewgall/openframe/internal/version"
 )
 
 type statusReport struct {

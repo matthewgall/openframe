@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openframe/openframe/internal/config"
-	"github.com/openframe/openframe/internal/db"
-	migrations "github.com/openframe/openframe/migrations"
+	"github.com/matthewgall/openframe/internal/config"
+	"github.com/matthewgall/openframe/internal/db"
+	migrations "github.com/matthewgall/openframe/migrations"
 )
 
 func newTestServer(t *testing.T) *Server {

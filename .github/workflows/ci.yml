@@ -61,7 +61,7 @@ jobs:
           GOOS: linux
           GOARCH: ${{ matrix.arch }}
         run: |
-          go build -ldflags "-X github.com/openframe/openframe/internal/version.Commit=${GITHUB_SHA::12}" \
+          go build -ldflags "-X github.com/matthewgall/openframe/internal/version.Commit=${GITHUB_SHA::12}" \
             -o /tmp/openframe ./cmd/openframe
       - name: Smoke: version
         run: /tmp/openframe version

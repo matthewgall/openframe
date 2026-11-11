@@ -9,9 +9,9 @@ DIST    := dist
 VERSION := 0.1.0-dev
 COMMIT  := $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 DATE    := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
-LDFLAGS := -X github.com/openframe/openframe/internal/version.Version=$(VERSION) \
-           -X github.com/openframe/openframe/internal/version.Commit=$(COMMIT) \
-           -X github.com/openframe/openframe/internal/version.Date=$(DATE)
+LDFLAGS := -X github.com/matthewgall/openframe/internal/version.Version=$(VERSION) \
+           -X github.com/matthewgall/openframe/internal/version.Commit=$(COMMIT) \
+           -X github.com/matthewgall/openframe/internal/version.Date=$(DATE)
 
 GOOS_LINUX := linux
 

@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/openframe/openframe/internal/db"
-	"github.com/openframe/openframe/internal/platform"
-	"github.com/openframe/openframe/internal/version"
+	"github.com/matthewgall/openframe/internal/db"
+	"github.com/matthewgall/openframe/internal/platform"
+	"github.com/matthewgall/openframe/internal/version"
 )
 
 type checkStatus string

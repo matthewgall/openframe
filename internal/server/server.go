@@ -24,9 +24,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 
-	"github.com/openframe/openframe/internal/config"
-	"github.com/openframe/openframe/internal/version"
-	"github.com/openframe/openframe/web"
+	"github.com/matthewgall/openframe/internal/config"
+	"github.com/matthewgall/openframe/internal/version"
+	"github.com/matthewgall/openframe/web"
 )
 
 // Server is the management server instance.

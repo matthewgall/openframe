@@ -6,7 +6,7 @@ import (
 	"testing"
 	"testing/fstest"
 
-	migrations "github.com/openframe/openframe/migrations"
+	migrations "github.com/matthewgall/openframe/migrations"
 )
 
 func openTestDB(t *testing.T) *sql.DB {

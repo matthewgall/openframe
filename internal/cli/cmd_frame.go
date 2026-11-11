@@ -6,12 +6,12 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/openframe/openframe/internal/db"
-	"github.com/openframe/openframe/internal/frame"
-	"github.com/openframe/openframe/internal/frame/display"
-	"github.com/openframe/openframe/internal/logging"
-	"github.com/openframe/openframe/internal/version"
-	migrations "github.com/openframe/openframe/migrations"
+	"github.com/matthewgall/openframe/internal/db"
+	"github.com/matthewgall/openframe/internal/frame"
+	"github.com/matthewgall/openframe/internal/frame/display"
+	"github.com/matthewgall/openframe/internal/logging"
+	"github.com/matthewgall/openframe/internal/version"
+	migrations "github.com/matthewgall/openframe/migrations"
 )
 
 func runFrame(args []string) int {

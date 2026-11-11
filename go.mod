@@ -1,4 +1,4 @@
-module github.com/openframe/openframe
+module github.com/matthewgall/openframe
 
 go 1.25.1
 

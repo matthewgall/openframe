@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/openframe/openframe/internal/version"
+	"github.com/matthewgall/openframe/internal/version"
 )
 
 // pair output for both human and JSON consumers.

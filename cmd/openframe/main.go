@@ -15,7 +15,7 @@ package main
 import (
 	"os"
 
-	"github.com/openframe/openframe/internal/cli"
+	"github.com/matthewgall/openframe/internal/cli"
 )
 
 func main() {

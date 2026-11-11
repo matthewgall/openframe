@@ -17,10 +17,10 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/openframe/openframe/internal/config"
-	"github.com/openframe/openframe/internal/frame/display"
-	"github.com/openframe/openframe/internal/logging"
-	"github.com/openframe/openframe/internal/version"
+	"github.com/matthewgall/openframe/internal/config"
+	"github.com/matthewgall/openframe/internal/frame/display"
+	"github.com/matthewgall/openframe/internal/logging"
+	"github.com/matthewgall/openframe/internal/version"
 )
 
 // State keys persisted in agent_state.

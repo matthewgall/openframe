@@ -14,8 +14,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/openframe/openframe/internal/config"
-	"github.com/openframe/openframe/internal/logging"
+	"github.com/matthewgall/openframe/internal/config"
+	"github.com/matthewgall/openframe/internal/logging"
 )
 
 // Exit codes.

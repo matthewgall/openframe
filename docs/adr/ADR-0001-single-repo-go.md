@@ -11,7 +11,7 @@ fragment protocol versioning and make coordinated releases awkward.
 
 ## Decision
 
-One repository, one Go module (`github.com/openframe/openframe`), one
+One repository, one Go module (`github.com/matthewgall/openframe`), one
 CLI binary `openframe` with sub-commands (`server`, `frame`, `pair`,
 `doctor`, `status`, `version`), plus a separate `openframe-updater`
 binary from the same tree (M6). Go ≥ 1.25, standard library first.
@@ -26,5 +26,5 @@ storage backends; `internal/updater` (M6) depends on neither.
   can spin up both processes in one CI job.
 - The updater is a separate binary (not a sub-command) because it runs
   with different privileges and must outlive/replace the frame binary.
-- The module path is a placeholder for the eventual upstream remote;
-  renaming is a mechanical find-replace before the first public release.
+- The module path `github.com/matthewgall/openframe` mirrors the
+  upstream remote (renamed from a placeholder in M1).

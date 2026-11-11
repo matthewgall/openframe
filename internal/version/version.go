@@ -2,9 +2,9 @@
 //
 // Values are injected at build time via -ldflags, e.g.:
 //
-//	-X github.com/openframe/openframe/internal/version.Version=1.2.3
-//	-X github.com/openframe/openframe/internal/version.Commit=abc1234
-//	-X github.com/openframe/openframe/internal/version.Date=2026-01-01T00:00:00Z
+//	-X github.com/matthewgall/openframe/internal/version.Version=1.2.3
+//	-X github.com/matthewgall/openframe/internal/version.Commit=abc1234
+//	-X github.com/matthewgall/openframe/internal/version.Date=2026-01-01T00:00:00Z
 package version
 
 import (
