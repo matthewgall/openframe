@@ -1,0 +1,74 @@
+name: Release
+
+# Builds versioned binaries on tags. Artifact signing of release metadata
+# (Ed25519, trusted-key pinning) and channel promotion are implemented
+# with the updater in milestone 6 — until then this workflow produces
+# unsigned-but-hash-verified artifacts for the release pipeline.
+#
+# Signing key material is NEVER referenced here; the M6 release job will
+# sign via an OIDC-permissioned external signer (see docs/adr/ADR-0007).
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  GO_VERSION: "1.25"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: ${{ matrix.arch }}
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          go build -trimpath \
+            -ldflags "-s -w \
+              -X github.com/openframe/openframe/internal/version.Version=${VERSION} \
+              -X github.com/openframe/openframe/internal/version.Commit=${GITHUB_SHA::12} \
+              -X github.com/openframe/openframe/internal/version.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o openframe-linux-${{ matrix.arch }} ./cmd/openframe
+      - name: Checksums
+        run: sha256sum openframe-linux-${{ matrix.arch }} > openframe-linux-${{ matrix.arch }}.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-${{ matrix.arch }}
+          path: |
+            openframe-linux-${{ matrix.arch }}
+            openframe-linux-${{ matrix.arch }}.sha256
+
+  publish:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Verify checksums
+        run: |
+          cd artifacts
+          for f in *.sha256; do sha256sum -c --quiet "$f" || exit 1; done
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/openframe-linux-*
+            artifacts/*.sha256
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

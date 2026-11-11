@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.25"
+
+jobs:
+  # --- Format & static analysis -----------------------------------------
+  fmt-vet:
+    name: gofmt + go vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then echo "unformatted files:"; echo "$out"; exit 1; fi
+      - name: go vet
+        run: go vet ./...
+
+  # --- Tests -------------------------------------------------------------
+  test:
+    name: tests (race)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Test
+        run: go test ./... -race -count=1
+
+  # --- Cross-builds ------------------------------------------------------
+  build:
+    name: build linux/${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: ${{ matrix.arch }}
+        run: |
+          go build -ldflags "-X github.com/openframe/openframe/internal/version.Commit=${GITHUB_SHA::12}" \
+            -o /tmp/openframe ./cmd/openframe
+      - name: Smoke: version
+        run: /tmp/openframe version
+      - name: Smoke: doctor --json parses
+        run: |
+          /tmp/openframe doctor --json | grep -q '"checks"'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openframe-linux-${{ matrix.arch }}
+          path: /tmp/openframe
+
+  # --- Web UI build -------------------------------------------------------
+  web:
+    name: admin SPA build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web/admin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Commit check
+        run: |
+          # The embedded dist/ is committed; CI verifies the build is
+          # reproducible from the checked-in sources.
+          if ! git diff --exit-code --quiet web/admin/dist; then
+            echo "::warning::web/admin/dist is out of date; run 'make web' and commit"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openframe-admin-dist
+          path: web/admin/dist
+
+  # --- Dependency audit ----------------------------------------------------
+  vuln:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...

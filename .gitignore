@@ -1,0 +1,22 @@
+# Binaries and build output
+/bin/
+/dist/
+*.test
+*.out
+
+# Local state
+/data/
+openframe.yaml
+
+# Go
+vendor/
+
+# Node / web build tooling (dist/ IS committed: the Go binary embeds it)
+web/admin/node_modules/
+web/admin/*.tsbuildinfo
+
+# Editors
+.vscode/
+.idea/
+*.swp
+.DS_Store
