@@ -1,0 +1,16 @@
+{
+  "name": "openframe-admin",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "OpenFrame management web UI (embedded in the server binary)",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "typescript": "~5.9.3",
+    "vite": "^7.1.0"
+  }
+}
