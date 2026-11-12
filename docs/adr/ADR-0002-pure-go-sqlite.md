@@ -17,10 +17,13 @@ WAL mode, `busy_timeout`, `foreign_keys=ON` and `_txlock=immediate` are
 set per-connection via the DSN; the pool is bounded (max 4 connections)
 to keep memory predictable on 1 GB hardware.
 
-Version pinning: the module targets Go 1.25, so dependencies that
-require a newer Go are pinned to the latest compatible release
-(`modernc.org/sqlite` v1.59.x, `golang.org/x/sys` v0.47.x,
-`modernc.org/libc` v1.75.x) with `GOTOOLCHAIN=local` enforced in CI.
+Version pinning: the module targets Go ≥ 1.26 (spec §3), so
+`golang.org/x/*` dependencies follow the current release line
+(`x/crypto` v0.59.x, `x/image` v0.48.x, `x/sys` v0.50.x — all
+`go 1.26.0`). `modernc.org/sqlite` v1.59.x and `modernc.org/libc`
+v1.75.x remain the SQLite pair. CI pins the exact toolchain via
+`setup-go` (matching `go.mod`), so builds are reproducible regardless
+of the runner's default Go.
 
 ## Consequences
 

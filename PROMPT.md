@@ -93,7 +93,7 @@ Treat these as performance targets, not assumptions. Measure actual resource con
 
 # 3. Application architecture
 
-Use Go 1.25 or newer.
+Use Go 1.26 or newer.
 
 Maintain a single repository and a unified CLI.
 

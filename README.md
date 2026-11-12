@@ -44,7 +44,7 @@ openframe version   # print version information (--json)
 
 ## Quickstart (development)
 
-Prerequisites: Go ≥ 1.25. Node ≥ 20 only needed to rebuild the web UI
+Prerequisites: Go ≥ 1.26. Node ≥ 20 only needed to rebuild the web UI
 (the built assets are committed and embedded in the binary).
 
 ```bash

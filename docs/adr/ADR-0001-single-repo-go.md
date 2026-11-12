@@ -14,7 +14,7 @@ fragment protocol versioning and make coordinated releases awkward.
 One repository, one Go module (`github.com/matthewgall/openframe`), one
 CLI binary `openframe` with sub-commands (`server`, `frame`, `pair`,
 `doctor`, `status`, `version`), plus a separate `openframe-updater`
-binary from the same tree (M6). Go ≥ 1.25, standard library first.
+binary from the same tree (M6). Go ≥ 1.26, standard library first.
 
 Package boundaries keep the three processes decoupled: `internal/server`
 never imports display code; `internal/frame` never imports server

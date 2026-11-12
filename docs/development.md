@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Go ≥ 1.25 (`go version`)
+- Go ≥ 1.26 (`go version`)
 - Node ≥ 20 (only for rebuilding the admin SPA; the built assets are
   committed, so a plain Go build needs no Node)
 - Linux (amd64 or arm64) for development. Tests use real temp SQLite
