@@ -14,6 +14,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -44,10 +45,30 @@ type ServerConfig struct {
 	// PublicBaseURL is the externally reachable base URL of this server
 	// (used in pairing links and manifest download URLs). May be empty in
 	// development; frames can then be pointed at Listen directly.
+	// When it starts with https://, session cookies are marked Secure.
 	PublicBaseURL   string        `yaml:"public_base_url"`
 	ReadTimeout     time.Duration `yaml:"read_timeout"`
 	WriteTimeout    time.Duration `yaml:"write_timeout"`
 	ShutdownTimeout time.Duration `yaml:"shutdown_timeout"`
+
+	// Auth and upload limits (M2).
+	SessionTTL           time.Duration `yaml:"session_ttl"`              // session lifetime (default 30d)
+	MaxUploadBytes       int64         `yaml:"max_upload_bytes"`         // per file (default 50 MiB)
+	MaxUploadFiles       int           `yaml:"max_upload_files"`         // per request (default 50)
+	MaxDecodeDimension   int           `yaml:"max_decode_dimension"`     // px, decoded image cap (default 8000)
+	LoginRateLimitPerMin int           `yaml:"login_rate_limit_per_min"` // per IP (default 5)
+}
+
+// SecureURL reports whether PublicBaseURL is HTTPS (cookie Secure flag).
+func (s ServerConfig) SecureURL() bool {
+	return strings.HasPrefix(s.PublicBaseURL, "https://")
+}
+
+// PhotoDir returns the content-addressed photo storage directory
+// (originals + derivatives), under DataDir/server/photos.
+func (c *Config) PhotoDir() string {
+	serverDir, _, _ := c.Paths()
+	return filepath.Join(serverDir, "photos")
 }
 
 type FrameConfig struct {
@@ -145,10 +166,15 @@ func Default() *Config {
 		DataDir: filepath.Join(home, ".openframe"),
 		Log:     LogConfig{Level: "info", Format: "json", Output: "stderr"},
 		Server: ServerConfig{
-			Listen:          ":8080",
-			ReadTimeout:     30 * time.Second,
-			WriteTimeout:    60 * time.Second,
-			ShutdownTimeout: 10 * time.Second,
+			Listen:               ":8080",
+			ReadTimeout:          30 * time.Second,
+			WriteTimeout:         60 * time.Second,
+			ShutdownTimeout:      10 * time.Second,
+			SessionTTL:           30 * 24 * time.Hour,
+			MaxUploadBytes:       50 * 1024 * 1024,
+			MaxUploadFiles:       50,
+			MaxDecodeDimension:   8000,
+			LoginRateLimitPerMin: 5,
 		},
 		Frame: FrameConfig{
 			Display: DisplayConfig{

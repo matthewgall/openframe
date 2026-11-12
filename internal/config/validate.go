@@ -22,6 +22,21 @@ func (c *Config) Validate() error {
 	if c.Server.ReadTimeout < 0 || c.Server.WriteTimeout < 0 || c.Server.ShutdownTimeout < 0 {
 		return fmt.Errorf("server timeouts must be >= 0")
 	}
+	if c.Server.SessionTTL < time.Hour {
+		return fmt.Errorf("server.session_ttl must be >= 1h")
+	}
+	if c.Server.MaxUploadBytes < 1<<20 || c.Server.MaxUploadBytes > 1<<30 {
+		return fmt.Errorf("server.max_upload_bytes must be in [1 MiB, 1 GiB]")
+	}
+	if c.Server.MaxUploadFiles < 1 || c.Server.MaxUploadFiles > 500 {
+		return fmt.Errorf("server.max_upload_files must be in [1, 500]")
+	}
+	if c.Server.MaxDecodeDimension < 1024 || c.Server.MaxDecodeDimension > 65536 {
+		return fmt.Errorf("server.max_decode_dimension must be in [1024, 65536]")
+	}
+	if c.Server.LoginRateLimitPerMin < 1 || c.Server.LoginRateLimitPerMin > 1000 {
+		return fmt.Errorf("server.login_rate_limit_per_min must be in [1, 1000]")
+	}
 
 	d := c.Frame.Display
 	if d.Driver != "headless" && d.Driver != "auto" && d.Driver != "drm" {

@@ -25,17 +25,27 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 
 	"github.com/matthewgall/openframe/internal/config"
+	"github.com/matthewgall/openframe/internal/server/albums"
+	"github.com/matthewgall/openframe/internal/server/api"
+	"github.com/matthewgall/openframe/internal/server/audit"
+	"github.com/matthewgall/openframe/internal/server/auth"
+	"github.com/matthewgall/openframe/internal/server/devices"
+	"github.com/matthewgall/openframe/internal/server/photos"
+	"github.com/matthewgall/openframe/internal/server/storage"
+	"github.com/matthewgall/openframe/internal/server/users"
 	"github.com/matthewgall/openframe/internal/version"
 	"github.com/matthewgall/openframe/web"
 )
 
 // Server is the management server instance.
 type Server struct {
-	cfg   *config.Config
-	log   *slog.Logger
-	db    *sql.DB
-	httpS *http.Server
-	start time.Time
+	cfg       *config.Config
+	log       *slog.Logger
+	db        *sql.DB
+	api       *api.Server
+	userStore *users.Store
+	httpS     *http.Server
+	start     time.Time
 }
 
 // New builds a Server. The db must already be migrated.
@@ -46,11 +56,38 @@ func New(cfg *config.Config, log *slog.Logger, dbh *sql.DB) (*Server, error) {
 	if dbh == nil {
 		return nil, fmt.Errorf("server: nil db")
 	}
+
+	fs, err := storage.NewLocalFS(cfg.PhotoDir())
+	if err != nil {
+		return nil, fmt.Errorf("server: photo storage: %w", err)
+	}
+
+	userStore := users.NewStore(dbh)
+	apiSrv, err := api.New(api.Deps{
+		Cfg:          cfg,
+		Log:          log,
+		DB:           dbh,
+		Users:        userStore,
+		Sessions:     auth.NewManager(dbh, cfg.Server.SessionTTL),
+		Photos:       photos.NewStore(dbh),
+		Albums:       albums.NewStore(dbh),
+		Devices:      devices.NewStore(dbh),
+		Storage:      fs,
+		Audit:        audit.NewRecorder(dbh, log),
+		LoginLimiter: auth.NewRateLimiter(time.Minute, 1024),
+		Pipeline:     photos.DefaultOptions(cfg.Server.MaxUploadBytes, cfg.Server.MaxDecodeDimension),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("server: api: %w", err)
+	}
+
 	return &Server{
-		cfg:   cfg,
-		log:   log,
-		db:    dbh,
-		start: time.Now(),
+		cfg:       cfg,
+		log:       log,
+		db:        dbh,
+		api:       apiSrv,
+		userStore: users.NewStore(dbh),
+		start:     time.Now(),
 	}, nil
 }
 
@@ -72,6 +109,10 @@ func (s *Server) Router() http.Handler {
 	})
 
 	r.Get("/healthz", s.handleHealth)
+
+	// REST API (M2+). Mounted on the /api prefix with its own routing,
+	// auth, CSRF and JSON 404s.
+	r.Mount("/api", s.api.Router())
 
 	// Admin SPA (embedded at build time). The catch-all serves static
 	// assets, falls back to index.html for extensionless SPA routes and
@@ -134,6 +175,39 @@ func (s *Server) handleHealth(w http.ResponseWriter, req *http.Request) {
 // ListenAddr returns the configured listen address.
 func (s *Server) ListenAddr() string { return s.cfg.Server.Listen }
 
+// bootstrapFirstAdmin implements the easy-first-run promise (spec §2):
+// on a brand-new installation (no active users), an initial
+// administrator is created with a generated temporary password and the
+// credential is logged exactly once at Info level.
+//
+// This is the single documented exception to the "no secrets in logs"
+// rule (ADR-0010): the value is a one-time recovery credential for an
+// account that does not yet exist and must be changed. It is logged
+// once, attributed to this server, and never repeated (subsequent
+// startups take the no-op path).
+func (s *Server) bootstrapFirstAdmin(ctx context.Context) error {
+	n, err := s.userStore.CountActive(ctx)
+	if err != nil {
+		return fmt.Errorf("count users: %w", err)
+	}
+	if n > 0 {
+		return nil
+	}
+	tmp, err := auth.TemporaryPassword()
+	if err != nil {
+		return fmt.Errorf("generate temporary password: %w", err)
+	}
+	u, err := s.userStore.Create(ctx, "admin@localhost", "Administrator", users.RoleAdmin, tmp)
+	if err != nil {
+		return fmt.Errorf("create initial admin: %w", err)
+	}
+	s.log.Info("first run: created initial administrator (one-time temporary password — change it after login)",
+		"first_run", true,
+		"email", u.Email,
+		"temporary_password", tmp)
+	return nil
+}
+
 // Run starts the HTTP server and blocks until ctx is cancelled, then
 // performs a graceful shutdown bounded by server.shutdown_timeout.
 //
@@ -142,6 +216,9 @@ func (s *Server) ListenAddr() string { return s.cfg.Server.Listen }
 // gate on the log/UDP notification without accepting half-configured
 // traffic.
 func (s *Server) Run(ctx context.Context) error {
+	if err := s.bootstrapFirstAdmin(ctx); err != nil {
+		s.log.Error("first-run bootstrap failed (continuing without it)", "error", err)
+	}
 	s.httpS = &http.Server{
 		Addr:         s.cfg.Server.Listen,
 		Handler:      s.Router(),
