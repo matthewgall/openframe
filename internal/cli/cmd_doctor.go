@@ -10,6 +10,9 @@ import (
 	"time"
 
 	"github.com/matthewgall/openframe/internal/db"
+	"github.com/matthewgall/openframe/internal/frame/display/drm"
+	"github.com/matthewgall/openframe/internal/frame/thermal"
+	"github.com/matthewgall/openframe/internal/frame/touch"
 	"github.com/matthewgall/openframe/internal/platform"
 	"github.com/matthewgall/openframe/internal/version"
 )
@@ -112,20 +115,51 @@ func runDoctor(args []string) int {
 	// 6. Frame database integrity (if present).
 	dbCheck(ctx, "frame database", filepath.Join(frameDir, "frame.db"), add)
 
-	// 7. Display detection.
-	disp := platform.DetectDisplay()
-	if disp.Present {
-		add("display", checkOK, fmt.Sprintf("%v", disp.Backends))
+	// 7. Display detection: probe every DRM card through the same
+	//    code path the frame uses, so doctor reports what the frame
+	//    will actually see.
+	dispDetails := []string{}
+	panelFound := false
+	for _, card := range drm.ScanCards() {
+		mode, err := drm.Available(card)
+		if err != nil {
+			dispDetails = append(dispDetails, card+": no connected panel ("+shortErr(err)+")")
+			continue
+		}
+		panelFound = true
+		dispDetails = append(dispDetails, card+": "+mode)
+	}
+	if panelFound {
+		add("display", checkOK, joinDetails(dispDetails))
+	} else if len(dispDetails) > 0 {
+		add("display", checkWarn, joinDetails(dispDetails)+" — the headless dev renderer will be used")
 	} else {
-		add("display", checkWarn, "no display backend found; the headless dev renderer will be used")
+		add("display", checkWarn, "no /dev/dri card found; the headless dev renderer will be used")
+	}
+	// The headless visual simulator is the dev-box equivalent of a
+	// panel: note it when configured.
+	if cfg.Frame.Display.SnapshotDir != "" {
+		add("simulator", checkOK, "headless snapshots enabled: "+cfg.Frame.Display.SnapshotDir)
 	}
 
-	// 8. Touch input detection.
-	touch := platform.DetectTouch()
-	if touch.Present {
-		add("touch", checkOK, fmt.Sprintf("%v", touch.Devices))
+	// 8. Touch input detection (same auto-detect the frame uses).
+	if path, err := touch.FindTouchscreen("", ""); err == nil {
+		add("touch", checkOK, path)
 	} else {
-		add("touch", checkWarn, "no touchscreen detected (dev renderer works without one)")
+		info := platform.DetectTouch()
+		if info.Present {
+			add("touch", checkWarn, fmt.Sprintf("%v detected but none matched the touchscreen heuristic", info.Devices))
+		} else {
+			add("touch", checkWarn, "no touchscreen detected (the frame works without one)")
+		}
+	}
+
+	// 9. Thermal sensor (throttling needs a readable zone).
+	temp, err := thermal.NewSysfsReader("/sys/class/thermal").MaxTempC()
+	if err != nil {
+		add("thermal", checkWarn, "no readable thermal zone; overheat throttling will be inactive")
+	} else {
+		add("thermal", checkOK, fmt.Sprintf("%.1f°C (throttle threshold %.0f°C)", temp, cfg.Frame.Thermal.ThresholdC))
 	}
 
 	// 9. Network / server reachability (informational: offline is a
@@ -146,7 +180,7 @@ func runDoctor(args []string) int {
 		}
 	}
 
-	// 10. Pairing / identity.
+	// 12. Pairing / identity.
 	st := readFrameState(ctx, cfg)
 	switch {
 	case !st.Available:
@@ -157,7 +191,7 @@ func runDoctor(args []string) int {
 		add("pairing", checkOK, fmt.Sprintf("device %s (state: %s)", st.DeviceID, st.PairingStatus))
 	}
 
-	// 11. Local cache health.
+	// 13. Local cache health.
 	photosDir := filepath.Join(frameDir, "photos")
 	if fi, err := os.Stat(photosDir); err == nil && fi.IsDir() {
 		add("cache", checkOK, photosDir)
@@ -165,7 +199,7 @@ func runDoctor(args []string) int {
 		add("cache", checkWarn, "photo cache not initialised yet (created on first sync)")
 	}
 
-	// 12. Updater / A-B slot layout.
+	// 14. Updater / A-B slot layout.
 	slotsDir := "/opt/openframe/slots"
 	if _, err := os.Stat(filepath.Join(slotsDir, "a", "openframe")); err == nil {
 		add("updater", checkOK, "A/B slot layout present at /opt/openframe")
@@ -213,6 +247,25 @@ func runDoctor(args []string) int {
 		return ExitError
 	}
 	return ExitOK
+}
+
+func joinDetails(parts []string) string {
+	out := ""
+	for i, p := range parts {
+		if i > 0 {
+			out += "; "
+		}
+		out += p
+	}
+	return out
+}
+
+func shortErr(err error) string {
+	s := err.Error()
+	if len(s) > 80 {
+		s = s[:77] + "..."
+	}
+	return s
 }
 
 // dbCheck reports database presence and integrity. Absence is a warning

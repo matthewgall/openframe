@@ -322,6 +322,28 @@ func TestSyncHappyPath(t *testing.T) {
 	}
 }
 
+func TestOnActivateHook(t *testing.T) {
+	ctx := context.Background()
+	p := newTestPhoto(strings.Repeat("a", 64))
+	e := newSyncEnv(t, p)
+
+	var calls []int64
+	e.eng.OnActivate(func(rev int64) { calls = append(calls, rev) })
+
+	e.runSync(ctx)
+
+	if len(calls) != 1 || calls[0] != 1 {
+		t.Fatalf("activation hook calls = %v, want [1]", calls)
+	}
+
+	// A 304 re-check must not re-fire the hook.
+	e.eng.Check(ctx)
+	e.eng.DownloadOnce(ctx)
+	if len(calls) != 1 {
+		t.Fatalf("hook fired again on no-op: %v", calls)
+	}
+}
+
 func TestSync304NoOp(t *testing.T) {
 	ctx := context.Background()
 	p := newTestPhoto(strings.Repeat("c", 64))

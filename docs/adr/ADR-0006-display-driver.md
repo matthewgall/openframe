@@ -1,6 +1,6 @@
 # ADR-0006: Display driver boundary; DRM/KMS leading for M4; headless dev renderer
 
-**Status:** accepted (milestone 1); hardware backend decision finalised in M4
+**Status:** implemented (milestone 4)
 
 ## Context
 
@@ -33,12 +33,41 @@ and a backend that never leaks into the server binary.
 - Backlight: never assumed. `SetPower`/`SetBrightness` degrade to
   no-op/black-frame where the hardware exposes no control, per spec §11.
 
-## Consequences
+## M4 implementation notes
 
-- The server binary links no graphics code at all (verified by
-  dependency isolation: `internal/server` has no display imports).
-- Renderer crash isolation: the renderer is one component in the frame's
-  bounded runner; it cannot corrupt sync state.
-- M4 carries the residual risk that the specific Waveshare panel
-  misbehaves under KMS (EDID quirks); the headless driver keeps the
-  whole system testable regardless.
+- **DRM/KMS won.** `internal/frame/display/drm` implements the hardware
+  backend in pure Go (`golang.org/x/sys/unix` only): no X11, no Wayland,
+  no SDL, no cgo — the `CGO_ENABLED=0` cross-build property (ADR-0002)
+  is intact. Scope is deliberately narrow: single connector, single
+  primary plane, one mode, XRGB8888 dumb (CPU) framebuffers, atomic
+  commits. That covers the target panel and everything the frame does.
+- **ABI verified against kernel headers.** Every ioctl number and
+  struct layout in `drm/ioctls.go` was derived from the Linux uapi
+  headers (v5.10, v6.6 and master all agree) and pinned by
+  `layout_test.go`, which asserts the mirrored Go struct sizes and the
+  exact ioctl request words at build time. A future layout slip fails
+  CI instead of a panel.
+- **Registration pattern.** The display factory cannot import the drm
+  package (the drm package implements `display.Driver` and imports
+  `display`). The backend registers itself with `display.Register` from
+  `init()`; the frame agent pulls it in with a blank import. "auto"
+  tries registered backends in order, then falls back to headless.
+- **Probe → commit split.** `New()` only probes (card, connected
+  connector, preferred mode, plane, property names). `Init()` applies
+  the mode with the first atomic commit (ALLOW_MODESET) and a black
+  frame. `PresentFrame()` copies the UI canvas into the dumb buffer,
+  wraps it in a fresh framebuffer and commits; the previous framebuffer
+  is released after the commit lands. Failure leaves the last frame on
+  screen (KMS holds the previous framebuffer).
+- **Brightness/power via sysfs backlight**, never assumed: frames
+  without a backlight degrade to no-op (spec §11).
+- **Headless driver = visual simulator.** With `snapshot_dir` set, the
+  headless driver writes `latest.png` + a bounded timestamped ring of
+  every presented frame, so the entire UI is testable and observable on
+  dev boxes without hardware (spec §10, §20).
+- **Residual risk (unchanged from the decision):** the specific
+  Waveshare panel's EDID/KMS behaviour is validated on real hardware
+  before release; until then `driver: auto` degrades to headless and
+  `doctor` reports the probe result. The unit-testable layers (struct
+  layouts, mode selection, property matching, gesture recognition, UI
+  state machine, compositing) are covered by tests.

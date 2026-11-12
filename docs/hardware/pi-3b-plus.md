@@ -20,24 +20,33 @@ touchscreen (USB HID touch), subject to validation on real hardware.
 
 ## Compatibility notes (to validate on hardware)
 
-- **HDMI output**: Pi 3B+ drives 1280×800 over HDMI; the touchscreen's
-  EDID must be respected (set `hdmi_*` options in `/boot/config.txt` if
-  the panel does not advertise correctly). Validation: boot to the frame
-  binary with the headless driver, then switch to the M4 DRM driver and
-  confirm the correct mode is selected.
-- **USB touch input**: the panel presents as a USB HID multitouch
-  device under `/dev/input/event*`. `openframe doctor` lists detected
-  touch devices by name; the M4 touch layer reads evdev (no X11).
-- **Backlight**: not assumed. The display power path goes through the
-  `display.Driver.SetPower` interface; if the panel exposes a PWM
-  backlight (e.g. via a GPIO-hat) it will be wired in M4, otherwise the
-  fallback is a black frame (ADR-0006).
+- **HDMI output (M4, validated on paper — confirm on the bench)**:
+  the M4 DRM driver probes the panel's connected connector and selects
+  its preferred mode (1280×800 for the Waveshare panel); the canvas is
+  sized to match exactly — a mismatch is a configuration error, not a
+  silent scale. If the panel's EDID misbehaves, set the `hdmi_*`
+  options in `/boot/config.txt` and re-check `openframe doctor`, which
+  reports the exact mode the driver will use. The frame user needs
+  access to the DRI node (Pi OS default group `video`).
+- **USB touch input (M4)**: the panel presents as a USB HID multitouch
+  device under `/dev/input/event*`. The touch layer reads evdev
+  directly (no X11); with no `frame.touch.device` set it auto-detects
+  the first touchscreen-class input by name. `openframe doctor`
+  reports the resolved device path. The frame user needs the `input`
+  group.
+- **Backlight (M4)**: brightness/power go through the sysfs backlight
+  class (`/sys/class/backlight`). If the panel exposes one,
+  `SetBrightness`/`SetPower` use it; otherwise the documented
+  degradation applies (no-op brightness, black frame for power off) —
+  ADR-0006.
 - **Power**: 5 V / 2.5 A (Pi 3B+) plus panel consumption — measure the
   combined load before choosing the PSU; under-powering shows up as
   SD card corruption, which we must never ship a box that is prone to.
-- **Thermals**: enclosed Pi 3B+ needs passive cooling (heatsink on SoC
-  + case airflow). Log CPU temperature in health reports (M5) so
-  sustained throttling is visible in the admin UI.
+- **Thermals (M4)**: the frame polls the sysfs thermal zones and
+  doubles the slideshow interval above `frame.thermal.threshold_c`
+  (default 70 °C); a missing sensor fails open. Enclosed Pi 3B+ still
+  needs passive cooling (heatsink + case airflow); sustained
+  throttling becomes visible in health reports (M5).
 
 ## Diagnostics on the device
 

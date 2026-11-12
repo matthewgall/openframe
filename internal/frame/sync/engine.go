@@ -124,6 +124,13 @@ type Engine struct {
 	// workers share the engine, so every draw is mutex-guarded.
 	rngMu sync.Mutex
 	rng   *rand.Rand
+
+	// onActivate is called (synchronously, on the download loop's
+	// goroutine) after a collection has been committed active. The
+	// M4 UI uses it to reload its data; the callback must be fast and
+	// non-blocking.
+	activateMu sync.Mutex
+	onActivate func(revision int64)
 }
 
 // New wires an engine. An empty serverURL leaves the engine in the
@@ -154,6 +161,24 @@ func New(deviceID, serverURL, token string, log *slog.Logger, dbh *sql.DB, c *ca
 
 // Paired reports whether the engine has a server and a credential.
 func (e *Engine) Paired() bool { return e.client != nil && e.client.token != "" }
+
+// OnActivate registers a callback fired after each successful
+// activation with the new collection revision. It must be called
+// before the loops start (or otherwise synchronized with them).
+func (e *Engine) OnActivate(fn func(revision int64)) {
+	e.activateMu.Lock()
+	e.onActivate = fn
+	e.activateMu.Unlock()
+}
+
+func (e *Engine) fireActivate(rev int64) {
+	e.activateMu.Lock()
+	fn := e.onActivate
+	e.activateMu.Unlock()
+	if fn != nil {
+		fn(rev)
+	}
+}
 
 // ServerConfigured reports whether a server URL is set (even if not
 // yet paired).
@@ -790,6 +815,7 @@ func (e *Engine) maybeActivate(ctx context.Context) {
 	e.resetFailures(ctx)
 	e.gc(ctx)
 	e.log.Info("collection activated", "revision", rev)
+	e.fireActivate(rev)
 }
 
 // activatePhotos swaps the active photos table to the staged set.

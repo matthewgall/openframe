@@ -90,27 +90,64 @@ type FrameConfig struct {
 	Sleep     SleepConfig     `yaml:"sleep"`
 	Update    UpdateConfig    `yaml:"update"`
 	Storage   StorageConfig   `yaml:"storage"`
+	Touch     TouchConfig     `yaml:"touch"`
+	Thermal   ThermalConfig   `yaml:"thermal"`
 }
 
 type DisplayConfig struct {
 	// Driver selects the display backend:
-	//   headless - development renderer, no hardware (default in dev)
-	//   auto     - pick a hardware backend if one is available
-	// Hardware drivers (drm, ...) arrive in milestone 4 and are selected
-	// here by name; see internal/frame/display and ADR-0006.
-	Driver      string  `yaml:"driver"`
-	Width       int     `yaml:"width"`
-	Height      int     `yaml:"height"`
-	Brightness  float64 `yaml:"brightness"`  // 0.0 - 1.0
-	Orientation string  `yaml:"orientation"` // auto | 0 | 90 | 180 | 270
+	//   headless - development renderer, no hardware (default in dev;
+	//              with snapshot_dir set it doubles as the visual
+	//              simulator: it writes PNG snapshots of the frame)
+	//   drm      - DRM/KMS native renderer (pure Go, ADR-0006)
+	//   auto     - pick a hardware backend if one is available,
+	//              otherwise headless
+	Driver string `yaml:"driver"`
+	Width  int    `yaml:"width"`
+	Height int    `yaml:"height"`
+	// Brightness is 0.0 - 1.0. Applied through the driver's hardware
+	// backlight where available; headless stores it (spec §11 fallback).
+	Brightness float64 `yaml:"brightness"`
+	// Orientation: auto | 0 | 90 | 180 | 270 (screen rotation).
+	Orientation string `yaml:"orientation"`
+	// Card is the DRM card to use for driver=drm (default
+	// /dev/dri/card0).
+	Card string `yaml:"card"`
+	// SnapshotDir enables the headless visual simulator: when set,
+	// every presented frame is written to <dir>/latest.png (plus a
+	// timestamped ring). Empty disables it.
+	SnapshotDir string `yaml:"snapshot_dir"`
+	// SnapshotInterval rate-limits snapshot writes (default 10s);
+	// screen-change frames are always written.
+	SnapshotInterval time.Duration `yaml:"snapshot_interval"`
 }
 
 type SlideshowConfig struct {
-	Interval    time.Duration `yaml:"interval"` // default 45s
-	Order       string        `yaml:"order"`    // sequential | random
-	Fit         string        `yaml:"fit"`      // contain | cover | crop
-	ShowCaption bool          `yaml:"show_caption"`
-	ShowClock   bool          `yaml:"show_clock"`
+	Interval           time.Duration `yaml:"interval"` // default 45s
+	Order              string        `yaml:"order"`    // sequential | random
+	Fit                string        `yaml:"fit"`      // contain | cover | crop
+	ShowCaption        bool          `yaml:"show_caption"`
+	ShowClock          bool          `yaml:"show_clock"`
+	Transition         string        `yaml:"transition"`          // none | crossfade | slide
+	TransitionDuration time.Duration `yaml:"transition_duration"` // default 600ms
+}
+
+// TouchConfig configures the capacitive touchscreen input (spec §10).
+type TouchConfig struct {
+	// Enabled turns the touch input pipeline on. Default true; set
+	// false on frames without a screen.
+	Enabled bool `yaml:"enabled"`
+	// Device is the evdev node, e.g. /dev/input/event3. Empty means
+	// auto-detect the first touchscreen-class input device.
+	Device string `yaml:"device"`
+}
+
+// ThermalConfig configures thermal throttling (spec §7: "hardware:
+// thermal throttling"). When the platform exceeds the threshold the
+// slideshow slows down (interval doubled) to reduce sustained load.
+type ThermalConfig struct {
+	Enabled    bool    `yaml:"enabled"`
+	ThresholdC float64 `yaml:"threshold_c"` // default 70
 }
 
 type SyncConfig struct {
@@ -185,11 +222,13 @@ func Default() *Config {
 		},
 		Frame: FrameConfig{
 			Display: DisplayConfig{
-				Driver:      "headless",
-				Width:       1280,
-				Height:      800,
-				Brightness:  0.8,
-				Orientation: "auto",
+				Driver:           "headless",
+				Width:            1280,
+				Height:           800,
+				Brightness:       0.8,
+				Orientation:      "auto",
+				Card:             "/dev/dri/card0",
+				SnapshotInterval: 10 * time.Second,
 			},
 			Sync: SyncConfig{
 				ManifestInterval:  60 * time.Minute,
@@ -201,11 +240,13 @@ func Default() *Config {
 				HealthReportEvery: 15 * time.Minute,
 			},
 			Slideshow: SlideshowConfig{
-				Interval:    45 * time.Second,
-				Order:       "sequential",
-				Fit:         "contain",
-				ShowCaption: true,
-				ShowClock:   true,
+				Interval:           45 * time.Second,
+				Order:              "sequential",
+				Fit:                "contain",
+				ShowCaption:        true,
+				ShowClock:          true,
+				Transition:         "crossfade",
+				TransitionDuration: 600 * time.Millisecond,
 			},
 			Sleep: SleepConfig{On: "07:00", Off: "22:00", TZ: "Europe/London"},
 			Update: UpdateConfig{
@@ -215,6 +256,8 @@ func Default() *Config {
 				CheckInterval:     6 * time.Hour,
 			},
 			Storage: StorageConfig{},
+			Touch:   TouchConfig{Enabled: true},
+			Thermal: ThermalConfig{Enabled: true, ThresholdC: 70},
 		},
 	}
 }

@@ -50,6 +50,7 @@ type Frame struct {
 	runner   *runner
 	cache    *cache.Store
 	engine   *sync.Engine
+	ui       *uiState
 }
 
 // New wires a Frame. Callers own the db and driver lifetimes; Run stops
@@ -99,10 +100,14 @@ func (f *Frame) Engine() *sync.Engine { return f.engine }
 // Run starts the frame and blocks until ctx is cancelled.
 //
 // Component set (bounded runner, spec §7):
-//   - heartbeat: records liveness to agent_state (basis for status and
-//     the M5 health reporter)
-//   - slideshow (M3 headless simulator): presents the active
-//     collection; runs regardless of connectivity
+//   - heartbeat: records liveness to agent_state (basis for status
+//     and the M5 health reporter)
+//   - ui (M4): the touchscreen interface — slideshow, gallery,
+//     search, settings; presents the active collection at the
+//     configured interval and runs regardless of connectivity
+//   - touch (M4): evdev touchscreen → gestures into the UI
+//   - sleep (M4): daily display sleep schedule (frame keeps running)
+//   - thermal (M4): overheat throttling (slideshow interval doubling)
 //   - sync.manifest / sync.downloads / sync.changes (M3): the
 //     offline-first synchronisation engine, independently scheduled
 //     per spec §9. M6 adds the update coordinator.
@@ -148,9 +153,20 @@ func (f *Frame) Run(ctx context.Context) error {
 			"hint", "set frame.device_token (see `openframe pair`) to synchronise")
 	}
 
+	// M4: display stack (UI engine, touch, sleep, thermal). The UI
+	// reads only the active collection, so building it before the
+	// first sync is safe: it shows the empty state until the first
+	// activation arrives.
+	if _, err := f.buildDisplay(ctx); err != nil {
+		return fmt.Errorf("build display: %w", err)
+	}
+
 	components := []Component{
 		{Name: "heartbeat", Run: f.heartbeatComponent},
-		{Name: "slideshow", Run: f.slideshowComponent},
+		{Name: "ui", Run: f.uiComponent},
+		{Name: "touch", Run: f.touchComponent},
+		{Name: "sleep", Run: f.sleepComponent},
+		{Name: "thermal", Run: f.thermalComponent},
 	}
 	for _, c := range eng.Components() {
 		components = append(components, Component{Name: c.Name, Run: c.Run})

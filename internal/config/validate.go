@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -40,7 +41,7 @@ func (c *Config) Validate() error {
 
 	d := c.Frame.Display
 	if d.Driver != "headless" && d.Driver != "auto" && d.Driver != "drm" {
-		return fmt.Errorf("frame.display.driver %q is not supported in this release (headless or auto)", d.Driver)
+		return fmt.Errorf("frame.display.driver %q is not supported in this release (headless|auto|drm)", d.Driver)
 	}
 	if d.Width <= 0 || d.Height <= 0 || d.Width > 8192 || d.Height > 8192 {
 		return fmt.Errorf("frame.display.width/height must be in (0, 8192]")
@@ -52,6 +53,12 @@ func (c *Config) Validate() error {
 	case "auto", "0", "90", "180", "270":
 	default:
 		return fmt.Errorf("frame.display.orientation %q invalid (auto|0|90|180|270)", d.Orientation)
+	}
+	if d.Card != "" && !strings.HasPrefix(d.Card, "/dev/dri/") {
+		return fmt.Errorf("frame.display.card %q must be a /dev/dri/cardN path", d.Card)
+	}
+	if d.SnapshotInterval < 0 {
+		return fmt.Errorf("frame.display.snapshot_interval must be >= 0")
 	}
 
 	s := c.Frame.Slideshow
@@ -67,6 +74,21 @@ func (c *Config) Validate() error {
 	case "contain", "cover", "crop":
 	default:
 		return fmt.Errorf("frame.slideshow.fit %q invalid (contain|cover|crop)", s.Fit)
+	}
+	switch s.Transition {
+	case "none", "crossfade", "slide":
+	default:
+		return fmt.Errorf("frame.slideshow.transition %q invalid (none|crossfade|slide)", s.Transition)
+	}
+	if s.TransitionDuration < 0 || s.TransitionDuration > 5*time.Second {
+		return fmt.Errorf("frame.slideshow.transition_duration must be in [0, 5s]")
+	}
+
+	if c.Frame.Thermal.ThresholdC < 30 || c.Frame.Thermal.ThresholdC > 100 {
+		return fmt.Errorf("frame.thermal.threshold_c must be in [30, 100]")
+	}
+	if c.Frame.Touch.Device != "" && !strings.HasPrefix(c.Frame.Touch.Device, "/dev/input/") {
+		return fmt.Errorf("frame.touch.device %q must be a /dev/input/eventN path", c.Frame.Touch.Device)
 	}
 
 	sy := c.Frame.Sync

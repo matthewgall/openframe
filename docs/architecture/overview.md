@@ -58,20 +58,56 @@ internal/server
 └── audit/           append-only audit recorder (JSON detail, no secrets)
 ```
 
-## Frame internals (M3)
+## Frame internals (M4)
 
 ```
 internal/frame
-├── frame.go         lifecycle: identity, DB, cache, sync engine, component runner
-├── slideshow.go     headless presenter: consumes the active collection via the display driver
-├── cache/           content-addressed derivative cache (.part → verify → rename; quota + GC)
-└── sync/            sync engine: manifest checker, download queue/worker, atomic
-                     activation, offline favourites queue, backoff + jitter, policies
+├── frame.go            lifecycle: identity, DB, cache, sync engine, UI stack, components
+├── ui_wiring.go        M4 display stack: UI engine, touch, sleep, thermal, ui.Data
+├── settings.go         local settings overrides (frame.db frame_settings)
+├── cache/              content-addressed derivative cache (.part → verify → rename; quota + GC)
+├── sync/               sync engine: manifest checker, download queue/worker, atomic
+│                       activation, offline favourites queue, backoff + jitter, policies
+├── display/            driver boundary + headless visual simulator
+│   └── drm/            pure-Go DRM/KMS renderer (atomic commits, dumb buffers)
+├── canvas/             fullscreen NRGBA compositing, fit modes, transitions, bitmap font
+├── ui/                 touchscreen state machine: slideshow, details, gallery, album,
+│                       search, settings, sleep; gesture dispatch; high-contrast rendering
+├── touch/              evdev 24-byte event reader, sample frames, gesture recognizer
+├── sleep/              daily on/off schedule (minutes-from-midnight, IANA tz)
+└── thermal/            sysfs thermal-zone monitor (fail-open)
 ```
 
-The frame's display path reads only the *active* collection; the sync
-engine writes *staging* state and promotes it in one transaction, so an
-incomplete sync is invisible to the display.
+### Display pipeline
+
+```
+frameData (ui.Data)  →  ui.Engine  →  canvas (composited NRGBA)
+  reads frame.db        state machine     photo cache + overlays
+  active collection     gestures/ticks    → Driver.PresentFrame
+                                              ├── headless (simulator: PNG snapshots)
+                                              └── drm (KMS atomic commit → panel)
+```
+
+The display path reads only the *active* collection; the sync engine
+writes *staging* state and promotes it in one transaction, so an
+incomplete sync is invisible to the display. Sync activation calls the
+UI's `Reload` through a hook; the UI re-reads the collection on its
+own thread (the engine's state mutex makes cross-goroutine updates
+safe) and presents the new set.
+
+### Touch and safety
+
+- Touch input: evdev → sample frames → gesture recognizer
+  (tap / double-tap / swipe / hold) → bounded (32) gesture channel →
+  UI. No touchscreen: the frame runs touchless (everything is
+  navigable by timer; settings apply is hold-protected).
+- Sleep: the schedule turns the *display* off (backlight, or black
+  frame) while the agent keeps running and syncing (spec §11).
+- Thermal: above the threshold the slideshow interval doubles; a
+  missing sensor fails open (never throttles on a read error).
+- Local settings (brightness, interval, transition, orientation,
+  sleep window, captions, clock) persist in frame.db and survive
+  restarts; they override the config file for that frame.
 
 The API layer is the only HTTP-facing code; domain packages are plain
 stores over the shared `*sql.DB` and are individually testable against

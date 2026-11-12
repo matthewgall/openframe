@@ -56,7 +56,12 @@ func runFrame(args []string) int {
 		Name:   cfg.Frame.Display.Driver,
 		Width:  cfg.Frame.Display.Width,
 		Height: cfg.Frame.Display.Height,
+		Card:   cfg.Frame.Display.Card,
 		Log:    rootLog,
+		Snapshots: display.SnapshotConfig{
+			Dir:      cfg.Frame.Display.SnapshotDir,
+			Interval: cfg.Frame.Display.SnapshotInterval,
+		},
 	})
 	if err != nil {
 		log.Error("failed to initialise display driver", "driver", cfg.Frame.Display.Driver, "error", err)

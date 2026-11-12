@@ -14,16 +14,15 @@ frame application and (from milestone 6) the signed auto-updater.
 
 ## Status
 
-OpenFrame is under active development in milestones. **Milestone 3
-(Offline-first synchronisation)** is complete:
+OpenFrame is under active development in milestones. **Milestone 4
+(Touchscreen interface)** is complete:
 
 | Milestone | Scope | Status |
 |---|---|---|
 | 1 | Foundation: CLI, config, logging, migrations, server health, headless frame, CI | ✅ complete |
 | 2 | Server MVP: auth, users, photo upload + derivatives, albums, web UI | ✅ complete |
 | 3 | Offline-first synchronisation: manifests, ETags, download queue, atomic activation | ✅ complete |
-| 4 | Touchscreen interface: native renderer, slideshow, gallery, favourites, sleep | planned |
-| 4 | Touchscreen interface: native renderer, slideshow, gallery, favourites, sleep | planned |
+| 4 | Touchscreen interface: DRM/KMS renderer, slideshow, gallery, search, settings, touch, sleep, thermal | ✅ complete (hardware validation pending) |
 | 5 | Multi-frame management: pairing, assignments, health, admin dashboard | planned |
 | 6 | Secure updater: A/B slots, signed releases, rollback, channels | planned |
 | 7 | Production hardening: backups, security review, long-run reliability | planned |
@@ -126,14 +125,21 @@ server:
 frame:
   server_url: https://frame.example.com
   display:
-    driver: headless             # headless (dev) | auto | drm (M4)
-    width: 1280
+    driver: auto                 # headless | auto | drm
+    width: 1280                  # headless canvas (drm uses the panel mode)
     height: 800
     brightness: 0.8
+    orientation: auto            # auto | 0 | 90 | 180 | 270
+    card: /dev/dri/card0         # driver=drm only
+    snapshot_dir: /var/log/openframe/snapshots   # headless visual simulator (dev)
   slideshow:
     interval: 45s
     order: sequential            # sequential | random
     fit: contain                 # contain | cover | crop
+    show_caption: true
+    show_clock: true
+    transition: crossfade        # none | crossfade | slide
+    transition_duration: 600ms
   sync:
     manifest_interval: 60m
     policy: hybrid               # immediate | scheduled | hybrid
@@ -142,6 +148,12 @@ frame:
     on: "07:00"
     off: "22:00"
     tz: Europe/London
+  touch:
+    enabled: true
+    device: ""                   # empty = auto-detect the touchscreen
+  thermal:
+    enabled: true
+    threshold_c: 70              # slideshow interval doubles above this
   update:
     channel: stable              # stable | beta | development
     policy: automatic            # automatic | download_only | manual
@@ -162,10 +174,30 @@ Every key can be set via environment: the YAML path becomes an uppercased
 │       ├── originals/<sha256>
 │       └── derivatives/<sha256>.<variant>
 ├── frame/
-│   ├── frame.db              # frame SQLite (identity, state; M3: cache metadata)
+│   ├── frame.db              # frame SQLite (identity, state; M3: sync/cache;
+│   │                         #        M4: local settings overrides)
 │   └── photos/               # M3: content-addressed photo cache
 └── updates/                  # M6: updater state
 ```
+
+## Running the frame (M4)
+
+```bash
+openframe frame        # on the Pi: driver=auto picks the DRM panel
+openframe doctor       # display / touch / thermal / pairing checks
+openframe status       # pairing + sync state of the local frame
+```
+
+The frame UI is touch-first (swipe/tap/double-tap/hold). On development
+machines without a panel, set `frame.display.driver: headless` and
+`frame.display.snapshot_dir`: every presented frame is written to
+`<snapshot_dir>/latest.png` (plus a small timestamped ring), so the
+complete UI — slideshow, gallery, search, settings, empty states — is
+observable without hardware (the spec's "development renderer").
+
+On the Pi the DRM renderer takes the panel directly (KMS atomic
+commits, pure Go, no X11/Wayland/SDL). Pairing and day-to-day
+operation are documented under [Pairing a frame](#pairing-a-frame-m3).
 
 ## Building
 
@@ -190,10 +222,16 @@ internal/
   cli/                  command implementations
   config/               YAML + env configuration
   db/                   SQLite (modernc) + migration runner
-  frame/                frame agent (identity, state, components, slideshow)
+  frame/                frame agent (identity, state, components, UI wiring)
   frame/cache/          content-addressed photo cache (M3)
   frame/sync/           manifest/download/changes sync engine (M3)
-  frame/display/        display driver boundary + headless renderer
+  frame/display/        display driver boundary + headless simulator
+  frame/display/drm/    pure-Go DRM/KMS renderer (M4, ADR-0006)
+  frame/canvas/         framebuffer compositing + bitmap font (M4)
+  frame/ui/             touchscreen UI: slideshow/gallery/search/settings (M4)
+  frame/touch/          evdev reader + gesture recognizer (M4)
+  frame/sleep/          daily display sleep schedule (M4)
+  frame/thermal/        overheat monitor (M4)
   server/manifest/      frame manifest builder (M3)
   logging/              slog setup
   platform/             host introspection (doctor)

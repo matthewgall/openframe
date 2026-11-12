@@ -34,8 +34,46 @@ make status
 Both use the state directory `.data-dev` by default when run through the
 Makefile. Override with `OPENFRAME_DATA_DIR`.
 
-The admin UI is at http://localhost:8080. The dashboard polls
-`/healthz`; other sections are placeholders until their milestones.
+The admin UI is at http://localhost:8080. Library, albums, users,
+frames and audit are live (M2/M3); dashboard shows live stats.
+
+## Frame UI development (M4)
+
+The frame UI has no window of its own: it composites into a
+full-screen canvas and hands pixels to a display driver. Without a
+panel, use the **headless visual simulator**:
+
+```yaml
+frame:
+  display:
+    driver: headless
+    width: 1280
+    height: 800
+    snapshot_dir: /tmp/of-snap    # writes latest.png + a small ring
+```
+
+`openframe frame` now renders the entire interface to
+`/tmp/of-snap/latest.png` on every present — open it in any image
+viewer and you can see the slideshow, gallery, search, settings and
+empty states, and watch sync activations refresh the display. The M4
+end-to-end test (`internal/frame/e2e_test.go`) does exactly this:
+real server → real frame → decodes the snapshot → asserts the
+uploaded photo's pixels are on screen.
+
+UI development conventions:
+
+- `internal/frame/ui` is a synchronous state machine: one goroutine
+  (the engine's `Run`) owns all state; external updates
+  (`Reload`/`SetAsleep`/`SetThrottled`) take the engine mutex briefly.
+  Tests drive it directly with `HandleGesture`/`Tick` and an injected
+  clock — no real time, no hardware.
+- The touch recognizer (`internal/frame/touch`) is pure: feed it
+  synthetic `Sample`s and assert `Gesture`s. evdev parsing is covered
+  with byte buffers.
+- The DRM ioctl layer is byte-for-byte pinned to the kernel uapi by
+  `internal/frame/display/drm/layout_test.go` (struct sizes + request
+  words). It cannot be exercised without a panel; on hardware, start
+  with `openframe doctor` (it probes the exact same code path).
 
 ## Working on the admin SPA
 
@@ -125,10 +163,10 @@ cross-build stays toolchain-free (ADR-0006).
 
 ## What is deliberately not here yet
 
-- Touchscreen/DRM renderer (M4) — the `display.Driver` interface and
-  headless implementation are the seam.
+- Multi-frame management polish (M5): in-UI pairing challenge/approval
+  (today: admin creates the device with the frame's identity + issues
+  a credential), remote sync requests, per-frame configuration from
+  the admin UI, health reporting.
 - Auto-updater (M6) — `internal/updater/` is an empty boundary package.
-- Photo/album/auth API (M2) — the server currently serves `/healthz` and
-  the SPA shell; `/api/v1` returns a JSON 404 until M2.
-- Pairing protocol (M5) — `openframe pair` initialises local identity;
-  the networked challenge/approval flow arrives in M5.
+- Production hardening (M7): backups/exports, long-run soak,
+  security review pass.
