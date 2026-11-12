@@ -18,7 +18,7 @@ jobs:
     name: gofmt + go vet
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -35,7 +35,7 @@ jobs:
     name: tests (race)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -51,7 +51,7 @@ jobs:
       matrix:
         arch: [amd64, arm64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -85,7 +85,7 @@ jobs:
       run:
         working-directory: web/admin
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
@@ -110,7 +110,7 @@ jobs:
     name: govulncheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
