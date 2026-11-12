@@ -42,6 +42,26 @@
   performs verification, installation and rollback. It is independently
   restartable and recovers from a failed application release.
 
+## Server internals (M2)
+
+```
+internal/server
+├── server.go        lifecycle: DB, storage bootstrap, HTTP, graceful shutdown
+├── api/             REST routes, middleware (session auth, CSRF, RBAC), handlers
+├── auth/            argon2id hashing, hashed DB sessions, CSRF derivation, rate limiter
+├── users/           user records, roles, last-active-admin lockout
+├── photos/          upload pipeline (validate → orient → hash → derivatives), photo store
+├── albums/          albums, membership, covers, device assignment
+├── devices/         M2 minimal device registry (pairing/credentials in M5)
+├── storage/         Storage interface + content-addressed local FS backend
+└── audit/           append-only audit recorder (JSON detail, no secrets)
+```
+
+The API layer is the only HTTP-facing code; domain packages are plain
+stores over the shared `*sql.DB` and are individually testable against
+the real migrations. The storage backend is an interface so M7 can add
+an S3-compatible implementation without touching the API.
+
 ## Offline-first invariants
 
 The frame must survive indefinite loss of the server:

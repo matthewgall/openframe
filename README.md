@@ -14,13 +14,14 @@ frame application and (from milestone 6) the signed auto-updater.
 
 ## Status
 
-OpenFrame is under active development in milestones. **Milestone 1
-(Foundation)** is complete:
+OpenFrame is under active development in milestones. **Milestone 2
+(Server MVP)** is complete:
 
 | Milestone | Scope | Status |
 |---|---|---|
 | 1 | Foundation: CLI, config, logging, migrations, server health, headless frame, CI | ✅ complete |
-| 2 | Server MVP: auth, users, uploads, derivatives, albums, web UI | planned |
+| 2 | Server MVP: auth, users, photo upload + derivatives, albums, web UI | ✅ complete |
+| 3 | Offline-first synchronisation: manifests, ETags, download queue, atomic activation | planned |
 | 3 | Offline-first synchronisation: manifests, ETags, download queue, atomic activation | planned |
 | 4 | Touchscreen interface: native renderer, slideshow, gallery, favourites, sleep | planned |
 | 5 | Multi-frame management: pairing, assignments, health, admin dashboard | planned |
@@ -56,8 +57,20 @@ openframe doctor    # what does this machine look like?
 openframe status    # what is the local frame doing?
 ```
 
-Open http://localhost:8080 for the admin web UI (dashboard shows live
-server health; remaining sections arrive with their milestones).
+Open http://localhost:8080 for the admin web UI.
+
+### First run (server)
+
+The very first time the server starts with an empty database it creates
+an initial administrator and logs the sign-in credentials exactly once:
+
+```json
+{"level":"INFO","msg":"first run: created initial administrator (one-time temporary password — change it after login)","first_run":true,"email":"admin@localhost","temporary_password":"OFPD-K4XT-9M2Q-V7ZR"}
+```
+
+Sign in at http://localhost:8080 with that password (change it via the
+account menu afterwards). This is the single documented exception to the
+“no secrets in logs” rule — see `docs/security/threat-model.md` (T-14).
 
 ## Configuration
 
@@ -75,6 +88,11 @@ log:
 server:
   listen: ":8080"
   public_base_url: https://frame.example.com
+  session_ttl: 720h                # admin session lifetime (default 30d)
+  max_upload_bytes: 52428800       # per-file upload cap (default 50 MiB)
+  max_upload_files: 50             # per-request file cap
+  max_decode_dimension: 8000       # px, reject larger images
+  login_rate_limit_per_min: 5      # per-IP failed/at-all login attempts
 frame:
   server_url: https://frame.example.com
   display:
@@ -109,7 +127,10 @@ Every key can be set via environment: the YAML path becomes an uppercased
 ```
 /var/lib/openframe/           # data_dir
 ├── server/
-│   └── server.db             # server SQLite metadata
+│   ├── server.db             # server SQLite metadata
+│   └── photos/               # M2: content-addressed originals + derivatives
+│       ├── originals/<sha256>
+│       └── derivatives/<sha256>.<variant>
 ├── frame/
 │   ├── frame.db              # frame SQLite (identity, state; M3: cache metadata)
 │   └── photos/               # M3: content-addressed photo cache
