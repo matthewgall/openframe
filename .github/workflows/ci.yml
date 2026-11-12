@@ -63,9 +63,13 @@ jobs:
         run: |
           go build -ldflags "-X github.com/matthewgall/openframe/internal/version.Commit=${GITHUB_SHA::12}" \
             -o /tmp/openframe ./cmd/openframe
-      - name: Smoke: version
+      # Only the host-arch binary can execute on the runner; the other
+      # matrix entry is cross-compiled and verified by the build itself.
+      - name: "Smoke: version"
+        if: matrix.arch == 'amd64'
         run: /tmp/openframe version
-      - name: Smoke: doctor --json parses
+      - name: "Smoke: doctor --json parses"
+        if: matrix.arch == 'amd64'
         run: |
           /tmp/openframe doctor --json | grep -q '"checks"'
       - uses: actions/upload-artifact@v4
