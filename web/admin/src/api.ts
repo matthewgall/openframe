@@ -62,6 +62,12 @@ export interface Device {
   created_at: string;
   revoked_at?: string;
   album_count: number;
+  has_credential: boolean;
+}
+
+export interface DeviceCredential {
+  token: string;
+  issued_at: string;
 }
 
 export interface AuditEntry {
@@ -346,6 +352,14 @@ export function listDevices(): Promise<{ devices: Device[] }> {
 
 export function createDevice(name: string): Promise<{ device: Device }> {
   return request('POST', '/api/v1/devices', { name });
+}
+
+export function issueDeviceCredential(id: string): Promise<DeviceCredential> {
+  return request('POST', `/api/v1/devices/${id}/credential`);
+}
+
+export function revokeDeviceCredential(id: string): Promise<void> {
+  return request('DELETE', `/api/v1/devices/${id}/credential`);
 }
 
 export function renameDevice(id: string, name: string): Promise<{ device: Device }> {
