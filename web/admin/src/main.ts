@@ -1,172 +1,190 @@
 import './style.css';
-import { getHealth, type Health } from './api';
-
-// --- DOM helper --------------------------------------------------------
-
-function h<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  attrs: Record<string, string> = {},
-  ...children: Array<Node | string>
-): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
-  for (const c of children) node.append(c);
-  return node;
-}
-
-function kvRow(parent: HTMLElement, k: string, v: string): void {
-  parent.append(h('dt', {}, k), h('dd', {}, v));
-}
+import { ApiError, changePassword, currentUser, login, logout, refreshMe } from './api';
+import { h } from './components';
+import { renderAlbums } from './views/albums';
+import { renderAudit } from './views/audit';
+import { renderDashboard } from './views/dashboard';
+import { renderFrames } from './views/frames';
+import { renderLibrary } from './views/library';
+import { renderUsers } from './views/users';
 
 // --- Section registry ---------------------------------------------------
-// Sections land in their milestone; until then they render a clear
-// placeholder. The nav is final now so the information architecture is
-// stable while the backend grows.
 
 interface Section {
   id: string;
   title: string;
-  milestone: string;
+  badge: string;
+  adminOnly?: boolean;
   render: (el: HTMLElement) => void;
 }
 
-function placeholder(el: HTMLElement, title: string, milestone: string, detail: string): void {
-  const card = h('div', { class: 'card placeholder' });
-  card.append(
-    h('div', { class: 'milestone' }, `${title} — arrives in ${milestone}`),
-    h('div', {}, detail),
-  );
-  el.append(card);
-}
-
-function formatUptime(sec: number): string {
-  const d = Math.floor(sec / 86400);
-  const hr = Math.floor((sec % 86400) / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  if (d > 0) return `${d}d ${hr}h ${m}m`;
-  if (hr > 0) return `${hr}h ${m}m`;
-  return `${m}m ${sec % 60}s`;
-}
-
-function renderDashboard(root: HTMLElement): void {
-  const banner = h('div', { class: 'banner' });
-  banner.textContent =
-    'Milestone 1 — foundation. The server, frame agent, configuration, migrations and this UI shell are live. Photo management arrives in Milestone 2.';
-  root.append(banner);
-
-  const grid = h('div', { class: 'grid' });
-
-  // Health card (live).
-  const healthCard = h('div', { class: 'card' });
-  healthCard.append(h('h2', {}, 'Server health'));
-  const status = h('span', { class: 'pill' }, 'loading…');
-  const healthKv = h('dl', { class: 'kv' });
-  healthCard.append(status, healthKv);
-
-  // Build card (static).
-  const buildCard = h('div', { class: 'card' });
-  buildCard.append(h('h2', {}, 'Build'));
-  const buildKv = h('dl', { class: 'kv' });
-  buildCard.append(buildKv);
-
-  grid.append(healthCard, buildCard);
-  root.append(grid);
-
-  const refresh = async (): Promise<void> => {
-    try {
-      const data: Health = await getHealth();
-      status.replaceChildren();
-      status.className = 'pill ' + (data.status === 'ok' ? 'ok' : 'degraded');
-      status.textContent = data.status === 'ok' ? 'healthy' : 'degraded';
-      buildKv.replaceChildren();
-      kvRow(buildKv, 'Version', data.version);
-      kvRow(buildKv, 'Commit', data.commit);
-      kvRow(buildKv, 'Server time', data.time);
-      healthKv.replaceChildren();
-      kvRow(healthKv, 'Database', data.db.status === 'ok' ? 'ok' : `error: ${data.db.detail ?? 'unknown'}`);
-      kvRow(healthKv, 'Uptime', formatUptime(data.uptime_seconds));
-      kvRow(healthKv, 'Started', data.started_at);
-    } catch (err) {
-      status.replaceChildren();
-      status.className = 'pill error';
-      status.textContent = 'unreachable';
-      healthKv.replaceChildren();
-      kvRow(healthKv, 'Error', String(err));
-    }
-  };
-
-  void refresh();
-  const timer = setInterval(() => void refresh(), 15_000);
-  // Stop polling once the dashboard is unmounted (no unnecessary redraws).
-  const obs = new MutationObserver(() => {
-    if (!document.body.contains(healthCard)) {
-      clearInterval(timer);
-      obs.disconnect();
-    }
-  });
-  obs.observe(document.body, { childList: true, subtree: true });
-}
-
 const sections: Section[] = [
-  { id: 'dashboard', title: 'Dashboard', milestone: 'M1', render: renderDashboard },
+  { id: 'dashboard', title: 'Dashboard', badge: 'live', render: renderDashboard },
+  { id: 'library', title: 'Photo Library', badge: 'M2', render: renderLibrary },
+  { id: 'albums', title: 'Albums', badge: 'M2', render: renderAlbums },
+  { id: 'frames', title: 'Frames', badge: 'M2 registry', adminOnly: true, render: renderFrames },
+  { id: 'users', title: 'Users', badge: 'M2', adminOnly: true, render: renderUsers },
   {
-    id: 'library',
-    title: 'Photo Library',
-    milestone: 'Milestone 2',
-    render: (root) =>
-      placeholder(root, 'Photo Library', 'Milestone 2', 'Uploads, derivatives, captions, search and duplicate detection.'),
-  },
-  {
-    id: 'albums',
-    title: 'Albums',
-    milestone: 'Milestone 2',
-    render: (root) => placeholder(root, 'Albums', 'Milestone 2', 'Shared and private albums, covers, ordering, assignment to frames.'),
-  },
-  {
-    id: 'frames',
-    title: 'Frames',
-    milestone: 'Milestones 3 & 5',
-    render: (root) => placeholder(root, 'Frames', 'Milestones 3 & 5', 'Registration, pairing, assignments, sync controls, health and update policies.'),
-  },
-  {
-    id: 'users',
-    title: 'Users',
-    milestone: 'Milestone 2',
-    render: (root) => placeholder(root, 'Users', 'Milestone 2', 'Family accounts, roles, invitations and recovery.'),
+    id: 'audit',
+    title: 'Audit log',
+    badge: 'M2',
+    adminOnly: true,
+    render: renderAudit,
   },
   {
     id: 'releases',
     title: 'Releases',
-    milestone: 'Milestone 6',
-    render: (root) =>
-      placeholder(root, 'Releases', 'Milestone 6', 'Signed releases, channels, rollout progress, deployments and rollbacks.'),
+    badge: 'M6',
+    adminOnly: true,
+    render: (el) => {
+      const card = h('div', { class: 'card placeholder' });
+      card.append(
+        h('div', { class: 'milestone' }, 'Releases — arrives in Milestone 6'),
+        h('div', {}, 'Signed releases, channels, rollout progress, deployments and rollbacks.'),
+      );
+      el.append(card);
+    },
   },
 ];
 
-// --- Shell ---------------------------------------------------------------
+// --- Login view ------------------------------------------------------------
 
-function main(): void {
-  const app = document.getElementById('app');
-  if (!app) return;
-  app.setAttribute('aria-busy', 'false');
-  app.replaceChildren();
+function renderLogin(root: HTMLElement, onAuthed: () => void): void {
+  const wrap = h('div', { class: 'login-wrap' });
+  const card = h('div', { class: 'card login-card' });
+  card.append(h('h1', {}, 'Open', h('span', { class: 'accent' }, 'Frame'), h('div', { class: 'login-sub' }, 'Sign in to manage your frames')));
+
+  const email = h('input', { class: 'input', type: 'email', autocomplete: 'username', placeholder: 'email' });
+  const password = h('input', { class: 'input', type: 'password', autocomplete: 'current-password', placeholder: 'password' });
+  const errEl = h('div', { class: 'login-error', role: 'alert' });
+  const submit = h('button', { class: 'btn primary', type: 'submit' }, 'Sign in');
+
+  const form = h('form');
+  form.append(
+    h('div', { class: 'field' }, h('label', { for: 'login-email' }, 'Email'), email),
+    h('div', { class: 'field' }, h('label', { for: 'login-pass' }, 'Password'), password),
+    errEl,
+    submit,
+  );
+  email.id = 'login-email';
+  password.id = 'login-pass';
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    errEl.textContent = '';
+    submit.disabled = true;
+    try {
+      await login(email.value.trim(), password.value);
+      onAuthed();
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : 'Sign-in failed.';
+      errEl.textContent = msg;
+      submit.disabled = false;
+      password.focus();
+    }
+  });
+
+  card.append(form);
+  wrap.append(card);
+  root.append(wrap);
+  email.focus();
+}
+
+// --- Account (password change) ---------------------------------------------
+
+function openAccountMenu(anchor: HTMLElement, onDone: () => void): void {
+  const menu = h('div', { class: 'menu', role: 'menu' });
+  const me = currentUser();
+  menu.append(h('div', { class: 'menu-head muted' }, me?.email ?? ''));
+
+  const changeItem = h('button', { class: 'menu-item', type: 'button' }, 'Change password…');
+  const logoutItem = h('button', { class: 'menu-item danger', type: 'button' }, 'Sign out');
+
+  changeItem.addEventListener('click', () => {
+    menu.remove();
+    const m = h('div', { class: 'modal-overlay', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Change password' });
+    const dlg = h('div', { class: 'modal' });
+    const body = h('div', { class: 'modal-body' });
+    const cur = h('input', { class: 'input', type: 'password', placeholder: 'Current password', autocomplete: 'current-password' });
+    const next = h('input', { class: 'input', type: 'password', placeholder: 'New password (min 10 chars)', autocomplete: 'new-password' });
+    const confirm = h('input', { class: 'input', type: 'password', placeholder: 'Repeat new password', autocomplete: 'new-password' });
+    const errEl = h('div', { class: 'login-error', role: 'alert' });
+    const save = h('button', { class: 'btn primary', type: 'button' }, 'Change password');
+    save.addEventListener('click', async () => {
+      if (next.value !== confirm.value) {
+        errEl.textContent = 'New passwords do not match.';
+        return;
+      }
+      errEl.textContent = '';
+      try {
+        await changePassword(cur.value, next.value);
+        m.remove();
+        onDone();
+      } catch (e) {
+        errEl.textContent = String(e);
+      }
+    });
+    body.append(
+      h('div', { class: 'field' }, h('label', {}, 'Current password'), cur),
+      h('div', { class: 'field' }, h('label', {}, 'New password'), next),
+      h('div', { class: 'field' }, h('label', {}, 'Repeat new password'), confirm),
+      errEl,
+      h('div', { class: 'modal-actions' }, save),
+    );
+    dlg.append(h('div', { class: 'modal-head' }, h('h2', {}, 'Change password')), body);
+    m.append(dlg);
+    document.body.append(m);
+    cur.focus();
+  });
+
+  logoutItem.addEventListener('click', async () => {
+    menu.remove();
+    await logout();
+    onDone();
+  });
+
+  menu.append(changeItem, logoutItem);
+  anchor.append(menu);
+  const away = (e: MouseEvent): void => {
+    if (!menu.contains(e.target as Node)) {
+      menu.remove();
+      document.removeEventListener('click', away);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', away), 0);
+}
+
+// --- Shell -------------------------------------------------------------------
+
+function renderApp(root: HTMLElement, onUnauthed: () => void): void {
+  const me = currentUser();
 
   const header = h('header');
   header.append(
     h('div', { class: 'logo' }, 'Open', h('span', {}, 'Frame')),
     h('div', { class: 'env' }, 'self-hosted · offline-first'),
   );
-  app.append(header);
+  const accountWrap = h('div', { class: 'account' });
+  const acctBtn = h('button', { class: 'btn ghost acct', type: 'button' },
+    me?.display_name || me?.email || 'account');
+  acctBtn.addEventListener('click', () => openAccountMenu(accountWrap, onUnauthed));
+  accountWrap.append(acctBtn);
+  header.append(accountWrap);
+  root.append(header);
 
   const layout = h('div', { class: 'layout' });
   const nav = h('nav', { 'aria-label': 'Main' });
   const main = h('main');
   layout.append(nav, main);
-  app.append(layout);
+  root.append(layout);
 
   const show = (id: string): void => {
     const section = sections.find((s) => s.id === id);
     if (!section) return;
+    if (section.adminOnly && me?.role !== 'admin') {
+      main.replaceChildren(h('div', { class: 'banner error' }, 'Administrator access required.'));
+      return;
+    }
     main.replaceChildren();
     main.append(h('h1', {}, section.title));
     section.render(main);
@@ -176,10 +194,10 @@ function main(): void {
     }
   };
 
+  const isAdmin = me?.role === 'admin';
   for (const s of sections) {
-    nav.append(
-      h('a', { href: `#${s.id}` }, s.title, h('span', { class: 'badge' }, s.milestone)),
-    );
+    if (s.adminOnly && !isAdmin) continue;
+    nav.append(h('a', { href: `#${s.id}` }, s.title, h('span', { class: 'badge' }, s.badge)));
   }
 
   nav.addEventListener('click', (e) => {
@@ -195,6 +213,25 @@ function main(): void {
 
   const initial = location.hash.slice(1) || 'dashboard';
   show(sections.some((s) => s.id === initial) ? initial : 'dashboard');
+}
+
+// --- Root -------------------------------------------------------------------------
+
+function main(): void {
+  const app = document.getElementById('app');
+  if (!app) return;
+
+  const boot = async (): Promise<void> => {
+    app.setAttribute('aria-busy', 'true');
+    app.replaceChildren(h('div', { class: 'login-wrap' }, h('div', { class: 'muted' }, 'Checking session…')));
+    const ok = await refreshMe();
+    app.setAttribute('aria-busy', 'false');
+    app.replaceChildren();
+    if (ok) renderApp(app, () => void boot());
+    else renderLogin(app, () => renderApp(app, () => void boot()));
+  };
+
+  void boot();
 }
 
 main();
