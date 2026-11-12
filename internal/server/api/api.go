@@ -87,6 +87,14 @@ func (s *Server) Router() http.Handler {
 		v1.Post("/auth/login", s.handleLogin)
 		v1.With(s.requireAuth).Get("/auth/csrf", s.handleCSRF)
 
+		// Frame synchronisation API (M3, spec §9): authenticated by
+		// device credential (Authorization: Bearer <token>), not by the
+		// admin session. Frames initiate all requests; the server never
+		// connects out to them (spec §12).
+		v1.With(s.requireDevice).Get("/frames/{deviceId}/manifest", s.handleFrameManifest)
+		v1.With(s.requireDevice).Get("/frames/{deviceId}/photos/{resource}", s.handleFramePhoto)
+		v1.With(s.requireDevice).Post("/frames/{deviceId}/changes", s.handleFrameChanges)
+
 		// Authenticated group: every route below requires a valid
 		// session; mutating requests additionally require the CSRF
 		// token (synchronizer token bound to the session).
@@ -127,6 +135,10 @@ func (s *Server) Router() http.Handler {
 			g.With(requireAdmin).Post("/devices", s.handleCreateDevice)
 			g.With(requireAdmin).Patch("/devices/{id}", s.handleUpdateDevice)
 			g.With(requireAdmin).Post("/devices/{id}/revoke", s.handleRevokeDevice)
+			g.With(requireAdmin).Post("/devices/{id}/credential", s.handleIssueDeviceCredential)
+			g.With(requireAdmin).Delete("/devices/{id}/credential", s.handleRevokeDeviceCredential)
+			g.With(requireAdmin).Post("/photos/{id}/priority", s.handleSetPhotoPriority)
+			g.With(requireAdmin).Post("/albums/{id}/priority", s.handleSetAlbumPriority)
 
 			g.With(requireAdmin).Get("/audit", s.handleAudit)
 			g.Get("/stats", s.handleStats)

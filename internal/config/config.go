@@ -77,6 +77,13 @@ type FrameConfig struct {
 	// configured; the renderer keeps working offline.
 	ServerURL string `yaml:"server_url"`
 
+	// DeviceToken is the frame's device credential issued by the
+	// management server (spec §12). Empty means the frame is unpaired:
+	// it stays healthy and displays any locally cached collection but
+	// performs no synchronisation. Set via OPENFRAME_FRAME_DEVICE_TOKEN
+	// or the config file; the token is a secret and is never logged.
+	DeviceToken string `yaml:"device_token"`
+
 	Display   DisplayConfig   `yaml:"display"`
 	Slideshow SlideshowConfig `yaml:"slideshow"`
 	Sync      SyncConfig      `yaml:"sync"`

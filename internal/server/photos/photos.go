@@ -248,6 +248,52 @@ func (s *Store) UpdateMetadata(ctx context.Context, id, caption string, captureD
 	return s.Get(ctx, id)
 }
 
+// RecordDerivative stores the integrity hash of a generated
+// derivative (spec §9 download safety: frames verify SHA-256).
+func (s *Store) RecordDerivative(ctx context.Context, photoHash, variant, sha256 string, size int64) error {
+	_, err := s.dbh.ExecContext(ctx,
+		`INSERT INTO photo_derivatives (photo_hash, variant, sha256, size_bytes, generated_at)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(photo_hash, variant) DO UPDATE SET
+		   sha256 = excluded.sha256, size_bytes = excluded.size_bytes`,
+		photoHash, variant, sha256, size, time.Now().UTC().Format(time.RFC3339))
+	return err
+}
+
+// DerivativeHash returns the recorded integrity hash and size of a
+// derivative. ok=false when no row exists.
+func (s *Store) DerivativeHash(ctx context.Context, photoHash, variant string) (sha string, size int64, ok bool, err error) {
+	err = s.dbh.QueryRowContext(ctx,
+		"SELECT sha256, size_bytes FROM photo_derivatives WHERE photo_hash = ? AND variant = ?",
+		photoHash, variant).Scan(&sha, &size)
+	if err == sql.ErrNoRows {
+		return "", 0, false, nil
+	}
+	if err != nil {
+		return "", 0, false, err
+	}
+	return sha, size, true, nil
+}
+
+// SetPriority marks (or unmarks) a photograph for priority delivery
+// (spec §9). The change is reflected in the device manifest on the
+// next build.
+func (s *Store) SetPriority(ctx context.Context, id string, priority bool) error {
+	var n int
+	if err := s.dbh.QueryRowContext(ctx, "SELECT COUNT(*) FROM photos WHERE id = ?", id).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	v := 0
+	if priority {
+		v = 1
+	}
+	_, err := s.dbh.ExecContext(ctx, "UPDATE photos SET priority = ? WHERE id = ?", v, id)
+	return err
+}
+
 // SoftDelete / Restore (spec §5: soft deletion and recovery).
 func (s *Store) SoftDelete(ctx context.Context, id string) error {
 	res, err := s.dbh.ExecContext(ctx,

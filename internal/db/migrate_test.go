@@ -59,16 +59,25 @@ func TestMigrateFreshAndIdempotent(t *testing.T) {
 	ctx := context.Background()
 	dbh := openTestDB(t)
 
-	applied, err := MigrateFromFS(ctx, dbh, migrations.FS(), "frame")
+	first, err := MigrateFromFS(ctx, dbh, migrations.FS(), "frame")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(applied) != 1 || applied[0] != 1 {
-		t.Errorf("applied = %v, want [1]", applied)
+	if len(first) == 0 {
+		t.Fatalf("no migrations applied on a fresh frame database")
+	}
+	if first[0] != 1 {
+		t.Errorf("first applied version = %d, want 1", first[0])
+	}
+	for i := 1; i < len(first); i++ {
+		if first[i] != first[i-1]+1 {
+			t.Errorf("applied versions not contiguous: %v", first)
+			break
+		}
 	}
 
 	// Second run: nothing to do, no error.
-	applied, err = MigrateFromFS(ctx, dbh, migrations.FS(), "frame")
+	applied, err := MigrateFromFS(ctx, dbh, migrations.FS(), "frame")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,18 +85,21 @@ func TestMigrateFreshAndIdempotent(t *testing.T) {
 		t.Errorf("second run applied %v, want none", applied)
 	}
 
-	// Tables exist.
+	// Core tables exist (M1 baseline; M3 adds the sync tables on top).
 	var n int
-	if err := dbh.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('identity','agent_state','meta','schema_migrations')").Scan(&n); err != nil {
+	if err := dbh.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('identity','agent_state','meta','schema_migrations','photos','albums','collections','download_queue','favourites')").Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	if n != 4 {
-		t.Errorf("tables = %d, want 4", n)
+	if n != 9 {
+		t.Errorf("tables = %d, want 9", n)
 	}
 
 	v, err := SchemaVersion(ctx, dbh)
-	if err != nil || v != 1 {
-		t.Errorf("schema version = %d, %v; want 1", v, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v != len(first) {
+		t.Errorf("schema version = %d, want %d", v, len(first))
 	}
 }
 

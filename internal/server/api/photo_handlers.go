@@ -2,6 +2,8 @@ package api
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +19,12 @@ import (
 	"github.com/matthewgall/openframe/internal/server/photos"
 	"github.com/matthewgall/openframe/internal/server/storage"
 )
+
+// sha256Hex returns the hex SHA-256 of b.
+func sha256Hex(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
 
 // handleUpload: POST /api/v1/photos/upload
 //
@@ -84,6 +92,12 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 				if err := s.store.Put(r.Context(), key, strings.NewReader(string(b))); err != nil {
 					s.log.Error("store derivative failed", "key", key, "error", err)
 				}
+			}
+			// Record the integrity hash the frame will verify against
+			// (spec §9 download safety). The bytes are deterministic per
+			// variant, so re-recording on duplicate upload is harmless.
+			if err := s.photoStore.RecordDerivative(r.Context(), md.Hash, variant, sha256Hex(b), int64(len(b))); err != nil {
+				s.log.Error("record derivative hash failed", "key", key, "error", err)
 			}
 		}
 

@@ -14,15 +14,15 @@ frame application and (from milestone 6) the signed auto-updater.
 
 ## Status
 
-OpenFrame is under active development in milestones. **Milestone 2
-(Server MVP)** is complete:
+OpenFrame is under active development in milestones. **Milestone 3
+(Offline-first synchronisation)** is complete:
 
 | Milestone | Scope | Status |
 |---|---|---|
 | 1 | Foundation: CLI, config, logging, migrations, server health, headless frame, CI | ✅ complete |
 | 2 | Server MVP: auth, users, photo upload + derivatives, albums, web UI | ✅ complete |
-| 3 | Offline-first synchronisation: manifests, ETags, download queue, atomic activation | planned |
-| 3 | Offline-first synchronisation: manifests, ETags, download queue, atomic activation | planned |
+| 3 | Offline-first synchronisation: manifests, ETags, download queue, atomic activation | ✅ complete |
+| 4 | Touchscreen interface: native renderer, slideshow, gallery, favourites, sleep | planned |
 | 4 | Touchscreen interface: native renderer, slideshow, gallery, favourites, sleep | planned |
 | 5 | Multi-frame management: pairing, assignments, health, admin dashboard | planned |
 | 6 | Secure updater: A/B slots, signed releases, rollback, channels | planned |
@@ -36,7 +36,7 @@ system design and [docs/adr/](docs/adr/) for recorded decisions.
 ```bash
 openframe server    # run the central management server
 openframe frame     # run the frame application (headless renderer in M1)
-openframe pair      # show or initialise frame pairing state
+openframe pair      # device identity + pairing state and next steps
 openframe doctor    # diagnose the local system (human or --json)
 openframe status    # show local OpenFrame status
 openframe version   # print version information (--json)
@@ -71,6 +71,36 @@ an initial administrator and logs the sign-in credentials exactly once:
 Sign in at http://localhost:8080 with that password (change it via the
 account menu afterwards). This is the single documented exception to the
 “no secrets in logs” rule — see `docs/security/threat-model.md` (T-14).
+
+### Pairing a frame (M3)
+
+1. On the frame, get (or create) its stable device identity:
+
+   ```bash
+   openframe pair    # prints the device id + what to do next
+   ```
+
+2. In the admin UI (or API), register the device with that id on the
+   Frames page, then **issue a credential**. The token is displayed
+   exactly once — the server stores only its SHA-256 hash.
+
+3. Point the frame at the server and give it the token:
+
+   ```bash
+   # config (or environment)
+   frame:
+     server_url: https://frame.example.com
+     device_token: ofd_xxx        # OPENFRAME_FRAME_DEVICE_TOKEN
+   ```
+
+4. `openframe frame` now syncs: it polls the conditional manifest
+   (ETag/304), downloads assigned photo derivatives into the
+   content-addressed cache, verifies SHA-256, and atomically activates
+   new collections. While offline it keeps displaying the last good
+   collection; local favourites are queued and replayed on reconnect.
+
+Unassigned frames show their idle screen; `openframe status` reports
+pairing state, active collection revision and sync health.
 
 ## Configuration
 
@@ -160,8 +190,11 @@ internal/
   cli/                  command implementations
   config/               YAML + env configuration
   db/                   SQLite (modernc) + migration runner
-  frame/                frame agent (identity, state, components)
+  frame/                frame agent (identity, state, components, slideshow)
+  frame/cache/          content-addressed photo cache (M3)
+  frame/sync/           manifest/download/changes sync engine (M3)
   frame/display/        display driver boundary + headless renderer
+  server/manifest/      frame manifest builder (M3)
   logging/              slog setup
   platform/             host introspection (doctor)
   protocol/             wire protocol version constants

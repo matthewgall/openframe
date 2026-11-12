@@ -71,6 +71,18 @@ func runStatus(args []string) int {
 	} else {
 		fmt.Println("  server:   (not configured)")
 	}
+	if st.DeviceID != "" {
+		fmt.Printf("  pairing:  %s\n", st.PairingStatus)
+	}
+	if st.LastSyncSuccess != nil {
+		fmt.Printf("  last sync success: %s\n", st.LastSyncSuccess.UTC().Format(time.RFC3339))
+	}
+	if st.ActiveRevision > 0 {
+		fmt.Printf("  active collection: revision %d\n", st.ActiveRevision)
+	}
+	if st.PendingChanges > 0 {
+		fmt.Printf("  pending local changes: %d\n", st.PendingChanges)
+	}
 	if st.LastSyncError != "" {
 		fmt.Printf("  last sync error: %s\n", st.LastSyncError)
 	}

@@ -116,17 +116,16 @@ Routes marked **admin** require the `admin` role.
 | `POST /api/v1/albums/{id}/frames/{deviceId}` | Assign frame (**admin**) | Device registry from the `/devices` endpoints; the frame sync protocol consumes this in M3/M5. |
 | `DELETE /api/v1/albums/{id}/frames/{deviceId}` | Unassign frame (**admin**) | |
 
-### Devices (**admin**, M2 minimal registry)
-
-Pairing, credentials, health and sync controls arrive in M5; M2 provides
-the registry that album assignment references.
+### Devices (**admin**)
 
 | Method & path | Purpose |
 |---|---|
-| `GET /api/v1/devices` | List (includes `album_count`, `revoked_at`) |
+| `GET /api/v1/devices` | List (includes `album_count`, `revoked_at`, `has_credential`) |
 | `POST /api/v1/devices` | Register by `{name}` |
 | `PATCH /api/v1/devices/{id}` | Rename (`{name}`) |
-| `POST /api/v1/devices/{id}/revoke` | Mark credentials revoked |
+| `POST /api/v1/devices/{id}/credential` | **M3** issue/rotate the device credential. Returns `{token, issued_at}` — the token is shown exactly once (only its SHA-256 is stored). Rotation invalidates the previous token immediately; revoked devices are rejected. |
+| `DELETE /api/v1/devices/{id}/credential` | **M3** revoke the current credential (frame stops syncing). |
+| `POST /api/v1/devices/{id}/revoke` | Revoke the whole device (all credentials). |
 
 ### Audit & stats
 
@@ -135,14 +134,77 @@ the registry that album assignment references.
 | `GET /api/v1/audit?limit=` (**admin**) | Recent audit entries | New-first; every login, mutation and admin action is recorded (T-05/T-06). Detail is JSON and never contains credentials (T-13). |
 | `GET /api/v1/stats` | Dashboard metrics | Photo/album/user/device counts, live storage bytes, last 10 uploads, server version/hostname. |
 
-## Planned endpoint map (M3–M6)
+## Milestone 3 — frame synchronisation API
+
+The frame API is **device-authenticated**, not session-authenticated:
+`Authorization: Bearer <token>` where the token was issued by
+`POST /api/v1/devices/{id}/credential`. The bearer token must belong to
+the `{deviceId}` in the path — a token for one device cannot be used
+against another device's resources. A 401 (code `bad_device_credential`)
+is returned for missing, wrong, rotated or revoked credentials; the
+response is identical for all of those so it does not distinguish them.
+
+The frame initiates every request (spec §12); the server never connects
+out to a frame.
+
+| Method & path | Purpose |
+|---|---|
+| `GET /api/v1/frames/{deviceId}/manifest` | The device's synchronisation manifest (see below). Supports conditional requests: send `If-None-Match: <etag>` to get an empty `304` when nothing changed. |
+| `GET /api/v1/frames/{deviceId}/photos/{resource}` | Download one derivative, where `{resource}` is `<hash>.display` or `<hash>.thumb`. Single-range requests (`Range: bytes=N-`) are honoured for resumable downloads. A photo is downloadable only if it is a live member of an album assigned to this device; anything else is a `404`. |
+| `POST /api/v1/frames/{deviceId}/changes` | Idempotent upload of local frame changes. Body `{"ops":[{op_id, type, photo_hash, value, ts}]}`. `type` is `favourite` in M3. `op_id` deduplication makes replays after partial failures safe; conflicts resolve last-write-wins on `ts`. Response `{accepted, duplicates, rejected, rejected_ops}`. |
+
+### Manifest shape
 
 ```
-/api/v1/frames/{id}/manifest        conditional manifest (M3)
-/api/v1/frames/{id}/photos/{hash}   authenticated download (M3)
-/api/v1/frames/{id}/changes         offline change upload (M3)
+{
+  "protocol": "openframe-manifest/1",
+  "revision": 3,              // content-derived, monotonic per device
+  "config_revision": 2,       // independent; bumps on device rename (M5 adds settings)
+  "config": { "name": "Living room" },
+  "albums": [
+    {
+      "id": "…", "name": "…", "cover_hash": "…", "priority": true,
+      "photos": [
+        {
+          "hash": "<original sha256>", "name": "…", "caption": "…",
+          "capture_date": "…", "priority": true, "favourite": true,
+          "width": 1200, "height": 800,
+          "display": { "resource": "<hash>.display", "size_bytes": 57201, "sha256": "…" },
+          "thumb":   { "resource": "<hash>.thumb",   "size_bytes": 15570, "sha256": "…" }
+        }
+      ]
+    }
+  ]
+}
+```
+
+- The **revision** advances only when the canonical manifest content
+  actually changes, so an unchanged 60-minute check costs one round
+  trip and zero bytes (304).
+- `sha256`/`size_bytes` per file are the integrity contract: the frame
+  verifies both before committing a file to its cache (spec §9 download
+  safety). Derivative hashes are recorded at generation time in
+  `photo_derivatives` and backfilled on first build for M2-era photos.
+- Files reference **authenticated resource identifiers**, never
+  permanent object-storage URLs (spec §9).
+- A photo is `priority` when it or any of its albums carries the
+  priority flag (spec §9 priority delivery).
+- `favourite` reflects the device-scoped favourite state the frame
+  uploaded (spec §5 per-frame favourites).
+
+### Priority flags (**admin**)
+
+| Method & path | Purpose |
+|---|---|
+| `POST /api/v1/photos/{id}/priority` | `{"priority": bool}` — mark a photograph for priority delivery. |
+| `POST /api/v1/albums/{id}/priority` | `{"priority": bool}` — mark a collection; every photo in it is priority-delivered. |
+
+### Remaining planned endpoints (M5–M6)
+
+```
 /api/v1/frames/{id}/health          health report ingest (M5)
-/api/v1/pairing/...                 challenge + approval (M5)
+/api/v1/frames/{id}/sync            remote sync trigger (M5)
+/api/v1/pairing/...                 challenge + approval pairing UX (M5)
 /api/v1/releases/...                release metadata (M6)
 ```
 

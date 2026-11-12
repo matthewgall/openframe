@@ -147,6 +147,25 @@ func (s *Store) List(ctx context.Context) ([]Album, error) {
 	return out, rows.Err()
 }
 
+// SetPriority marks (or unmarks) a collection for priority delivery
+// (spec §9: "Administrators may mark a photograph or collection as
+// priority").
+func (s *Store) SetPriority(ctx context.Context, id string, priority bool) error {
+	var n int
+	if err := s.dbh.QueryRowContext(ctx, "SELECT COUNT(*) FROM albums WHERE id = ?", id).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	v := 0
+	if priority {
+		v = 1
+	}
+	_, err := s.dbh.ExecContext(ctx, "UPDATE albums SET priority = ? WHERE id = ?", v, id)
+	return err
+}
+
 // Update mutates name/description/shared/sort_order (empty/zero =
 // unchanged for strings; sortOrder < 0 = unchanged).
 func (s *Store) Update(ctx context.Context, id, name, description string, shared *bool, sortOrder int) (*Album, error) {

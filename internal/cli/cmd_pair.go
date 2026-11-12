@@ -45,10 +45,31 @@ func runPair(args []string) int {
 	}
 	defer dbh.Close()
 
-	state := "pending"
+	state := "unconfigured"
 	var serverURL string
 	if cfg.Frame.ServerURL != "" {
 		serverURL = cfg.Frame.ServerURL
+		state = "unpaired"
+		if cfg.Frame.DeviceToken != "" {
+			state = "paired"
+		}
+	}
+
+	next := []string{}
+	switch state {
+	case "unconfigured":
+		next = append(next,
+			"set frame.server_url (or OPENFRAME_FRAME_SERVER_URL) to the management server",
+		)
+	case "unpaired":
+		next = append(next,
+			"in the admin web UI (Frames), add a device and issue its credential",
+			"set frame.device_token (or OPENFRAME_FRAME_DEVICE_TOKEN) to the issued token",
+			"restart `openframe frame`; the first manifest sync starts automatically",
+		)
+	}
+	if state != "" {
+		next = append(next, "the frame identity above is stable across restarts and re-pairing")
 	}
 
 	out := pairStatus{
@@ -56,10 +77,7 @@ func runPair(args []string) int {
 		State:     state,
 		ServerURL: serverURL,
 		FrameVer:  version.Version,
-		NextSteps: []string{
-			"pairing protocol (challenge, admin approval, device credentials) arrives in milestone 5",
-			"the frame identity above is stable and will be used by the pairing flow",
-		},
+		NextSteps: next,
 	}
 
 	if cf.json {

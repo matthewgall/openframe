@@ -15,10 +15,13 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"time"
 
 	"github.com/matthewgall/openframe/internal/config"
+	"github.com/matthewgall/openframe/internal/frame/cache"
 	"github.com/matthewgall/openframe/internal/frame/display"
+	"github.com/matthewgall/openframe/internal/frame/sync"
 	"github.com/matthewgall/openframe/internal/logging"
 	"github.com/matthewgall/openframe/internal/version"
 )
@@ -28,7 +31,7 @@ const (
 	StateKeyRunning       = "running"        // "true"/"false"
 	StateKeyLastHeartbeat = "last_heartbeat" // RFC3339Nano UTC
 	StateKeyAppVersion    = "app_version"
-	StateKeyLastSyncError = "last_sync_error" // set by M3 sync agent
+	StateKeyDeviceName    = "device_name" // server-assigned name (M3 manifest config)
 )
 
 // heartbeatInterval is how often the agent records a live heartbeat into
@@ -45,6 +48,8 @@ type Frame struct {
 	identity string
 	started  time.Time
 	runner   *runner
+	cache    *cache.Store
+	engine   *sync.Engine
 }
 
 // New wires a Frame. Callers own the db and driver lifetimes; Run stops
@@ -83,15 +88,24 @@ func (f *Frame) Driver() display.Driver { return f.drv }
 // DB exposes the frame database (used by `openframe status` and tests).
 func (f *Frame) DB() *sql.DB { return f.db }
 
+// Cache exposes the content-addressed photo cache (used by the
+// slideshow and by tests).
+func (f *Frame) Cache() *cache.Store { return f.cache }
+
+// Engine exposes the synchronisation engine (used by the status
+// command, the M5 health reporter and tests). Nil until Run.
+func (f *Frame) Engine() *sync.Engine { return f.engine }
+
 // Run starts the frame and blocks until ctx is cancelled.
 //
-// M1 component set:
+// Component set (bounded runner, spec §7):
 //   - heartbeat: records liveness to agent_state (basis for status and
 //     the M5 health reporter)
-//
-// M3 adds: manifest checker, download queue processor, local-changes
-// uploader. M4 adds: renderer loop, sleep scheduler. M6 adds: update
-// coordinator. They slot into the same bounded runner.
+//   - slideshow (M3 headless simulator): presents the active
+//     collection; runs regardless of connectivity
+//   - sync.manifest / sync.downloads / sync.changes (M3): the
+//     offline-first synchronisation engine, independently scheduled
+//     per spec §9. M6 adds the update coordinator.
 func (f *Frame) Run(ctx context.Context) error {
 	log := f.log
 
@@ -115,9 +129,34 @@ func (f *Frame) Run(ctx context.Context) error {
 	}
 	f.heartbeat(ctx) // record the first one immediately
 
-	err = f.runner.Run(ctx, []Component{
+	// M3: content-addressed cache + synchronisation engine. The cache
+	// root lives under the frame data dir (DataDir/frame/photos).
+	_, frameDir, _ := f.cfg.Paths()
+	c, err := cache.New(filepath.Join(frameDir, "photos"), f.cfg.Frame.Storage.QuotaBytes)
+	if err != nil {
+		return fmt.Errorf("open photo cache: %w", err)
+	}
+	f.cache = c
+	eng, err := sync.New(identity, f.cfg.Frame.ServerURL, f.cfg.Frame.DeviceToken,
+		f.log, f.db, c, &f.cfg.Frame)
+	if err != nil {
+		return fmt.Errorf("build sync engine: %w", err)
+	}
+	f.engine = eng
+	if !eng.Paired() {
+		log.Info("frame not paired; running display-only",
+			"hint", "set frame.device_token (see `openframe pair`) to synchronise")
+	}
+
+	components := []Component{
 		{Name: "heartbeat", Run: f.heartbeatComponent},
-	})
+		{Name: "slideshow", Run: f.slideshowComponent},
+	}
+	for _, c := range eng.Components() {
+		components = append(components, Component{Name: c.Name, Run: c.Run})
+	}
+
+	err = f.runner.Run(ctx, components)
 
 	// Mark ourselves stopped regardless of the cause.
 	stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

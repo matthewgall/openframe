@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -22,8 +23,11 @@ type frameState struct {
 	LastHeartbeat    *time.Time `json:"last_heartbeat,omitempty"`
 	AppVersion       string     `json:"app_version,omitempty"`
 	LastSyncError    string     `json:"last_sync_error,omitempty"`
-	PairingStatus    string     `json:"pairing_status"` // unconfigured | pending | unknown
+	PairingStatus    string     `json:"pairing_status"` // unconfigured | unpaired | paired | paired_synced
 	ServerConfigured bool       `json:"server_configured"`
+	LastSyncSuccess  *time.Time `json:"last_sync_success,omitempty"`
+	ActiveRevision   int64      `json:"active_revision,omitempty"`
+	PendingChanges   int        `json:"pending_changes,omitempty"`
 }
 
 // readFrameState opens the frame database read-only (never creating it)
@@ -68,10 +72,50 @@ func readFrameState(ctx context.Context, cfg *config.Config) frameState {
 	if v, err := stValue(ctx, dbh, "app_version"); err == nil {
 		st.AppVersion = v
 	}
-	if v, err := stValue(ctx, dbh, "last_sync_error"); err == nil {
+	st.PairingStatus = pairingStatus(cfg)
+	if st.DeviceID == "" {
+		st.PairingStatus = "unconfigured"
+	}
+	if v, err := syncValue(ctx, dbh, "last_sync_error"); err == nil {
+		st.LastSyncError = v
+	} else if v, err := stValue(ctx, dbh, "last_sync_error"); err == nil {
 		st.LastSyncError = v
 	}
+	if v, err := syncValue(ctx, dbh, "last_success"); err == nil {
+		if t, perr := time.Parse(time.RFC3339, v); perr == nil {
+			st.LastSyncSuccess = &t
+			st.PairingStatus = "paired_synced"
+		}
+	}
+	if v, err := syncValue(ctx, dbh, "active_revision"); err == nil {
+		fmt.Sscanf(v, "%d", &st.ActiveRevision)
+	}
+	if err := dbh.QueryRowContext(ctx, "SELECT COUNT(*) FROM favourites_queue").Scan(&st.PendingChanges); err != nil {
+		st.PendingChanges = 0
+	}
 	return st
+}
+
+// pairingStatus derives the pairing state from configuration.
+func pairingStatus(cfg *config.Config) string {
+	if cfg.Frame.ServerURL == "" {
+		return "unconfigured"
+	}
+	if cfg.Frame.DeviceToken == "" {
+		return "unpaired"
+	}
+	return "paired"
+}
+
+// syncValue reads the M3 sync_state table (tolerating pre-M3 databases
+// that do not have it).
+func syncValue(ctx context.Context, dbh *sql.DB, key string) (string, error) {
+	var v string
+	err := dbh.QueryRowContext(ctx, "SELECT value FROM sync_state WHERE key = ?", key).Scan(&v)
+	if err == sql.ErrNoRows {
+		return "", err
+	}
+	return v, err
 }
 
 func stValue(ctx context.Context, dbh *sql.DB, key string) (string, error) {

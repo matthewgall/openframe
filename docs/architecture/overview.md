@@ -42,20 +42,36 @@
   performs verification, installation and rollback. It is independently
   restartable and recovers from a failed application release.
 
-## Server internals (M2)
+## Server internals (M2–M3)
 
 ```
 internal/server
 ├── server.go        lifecycle: DB, storage bootstrap, HTTP, graceful shutdown
-├── api/             REST routes, middleware (session auth, CSRF, RBAC), handlers
+├── api/             REST routes, middleware (session auth, CSRF, RBAC, device auth), handlers
 ├── auth/            argon2id hashing, hashed DB sessions, CSRF derivation, rate limiter
 ├── users/           user records, roles, last-active-admin lockout
 ├── photos/          upload pipeline (validate → orient → hash → derivatives), photo store
 ├── albums/          albums, membership, covers, device assignment
-├── devices/         M2 minimal device registry (pairing/credentials in M5)
-├── storage/         Storage interface + content-addressed local FS backend
+├── devices/         device registry + credential lifecycle (issue/rotate/revoke, hash-only at rest)
+├── manifest/        frame manifest builder (content-derived revision, config revision)
+├── storage/         Storage interface + content-addressed local FS backend (Range reads for resume)
 └── audit/           append-only audit recorder (JSON detail, no secrets)
 ```
+
+## Frame internals (M3)
+
+```
+internal/frame
+├── frame.go         lifecycle: identity, DB, cache, sync engine, component runner
+├── slideshow.go     headless presenter: consumes the active collection via the display driver
+├── cache/           content-addressed derivative cache (.part → verify → rename; quota + GC)
+└── sync/            sync engine: manifest checker, download queue/worker, atomic
+                     activation, offline favourites queue, backoff + jitter, policies
+```
+
+The frame's display path reads only the *active* collection; the sync
+engine writes *staging* state and promotes it in one transaction, so an
+incomplete sync is invisible to the display.
 
 The API layer is the only HTTP-facing code; domain packages are plain
 stores over the shared `*sql.DB` and are individually testable against

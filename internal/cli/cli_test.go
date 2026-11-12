@@ -107,8 +107,10 @@ func TestPairInitialisesIdentity(t *testing.T) {
 	if p.DeviceID != m[1] {
 		t.Errorf("json device id mismatch: %q vs %q", p.DeviceID, m[1])
 	}
-	if p.State != "pending" {
-		t.Errorf("state = %q, want pending", p.State)
+	// No server_url is configured in the temp env, so the frame is
+	// unconfigured (M3 states: unconfigured | unpaired | paired).
+	if p.State != "unconfigured" {
+		t.Errorf("state = %q, want unconfigured", p.State)
 	}
 }
 

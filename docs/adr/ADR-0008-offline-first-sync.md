@@ -1,6 +1,6 @@
 # ADR-0008: Offline-first sync — content-addressed cache, staged activation, additive migrations
 
-**Status:** accepted (milestone 1); implementation in M3
+**Status:** accepted (milestone 1); implemented in M3 (see Consequences for what shipped)
 
 ## Context
 
@@ -41,3 +41,35 @@ safe rollback cannot be guaranteed.
 - GC is safe by construction (refcounted), not by timing.
 - Cost: extra bookkeeping tables (revisions, refs, queue) and a
   slightly larger frame DB; negligible at family-photo scale.
+
+## Implementation notes (M3)
+
+- **Cache.** `internal/frame/cache` implements the content-addressed
+  store under `DataDir/frame/photos` as `<hash>.<variant>`. Downloads
+  write to `<hash>.<variant>.part`, verify SHA-256 and size, then
+  rename into place. A hash-named file is therefore either
+  complete-and-valid or absent. A configurable quota plus a free-space
+  guard makes a full disk stop new downloads instead of corrupting
+  state.
+- **Staging vs active.** The frame DB keeps two namespaces: `albums`/
+  `photos` (the active, displayable collection) and `staging_albums`/
+  `staging_photos` (the in-flight manifest). A manifest is staged into
+  the staging tables; the download queue is built from it; and
+  **activation is a single transaction** that moves staging → active
+  only when every required file is committed. On any failure the
+  previous collection is untouched.
+- **Refcounted GC.** `collections` tracks `active` and `retired`
+  revisions. `cache.GC` never deletes a file still referenced by the
+  active collection or by the most recent retired one (so a rollback
+  of activation is possible), keeping disk bounded.
+- **Protocol.** `internal/server/manifest` builds the manifest with a
+  content-derived, monotonic `revision` and an independent
+  `config_revision`. The handler serves an `ETag` and answers
+  `If-None-Match` with an empty `304`, so an unchanged 60-minute poll
+  transfers no payload. `photos` and `albums` carry `priority` flags
+  and the manifest marks them for priority delivery.
+- **Offline changes.** Favourites are the first frame-originated
+  change. They are queued in `favourites_queue` (keyed by stable
+  `op_id`), applied locally, and replayed to the server's idempotent
+  `POST /changes` when connectivity returns; `op_id` dedup +
+  last-write-wins on `ts` makes replays safe.

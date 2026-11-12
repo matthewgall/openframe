@@ -42,6 +42,11 @@ type Storage interface {
 	// Open returns a reader for key. NotFound errors wrap ErrNotFound.
 	Open(ctx context.Context, key Key) (io.ReadCloser, error)
 
+	// OpenAt returns a reader for key positioned at offset (used for
+	// HTTP Range reads / resumable downloads). Local backends seek; the
+	// future S3 backend maps this to a Range GET.
+	OpenAt(ctx context.Context, key Key, offset int64) (io.ReadCloser, error)
+
 	// Size reports the object size in bytes.
 	Size(ctx context.Context, key Key) (int64, error)
 

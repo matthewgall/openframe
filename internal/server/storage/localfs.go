@@ -85,6 +85,10 @@ func isHex(s string) bool {
 
 // Open implements Storage.
 func (l *LocalFS) Open(_ context.Context, key Key) (io.ReadCloser, error) {
+	return l.OpenAt(context.Background(), key, 0)
+}
+
+func (l *LocalFS) OpenAt(_ context.Context, key Key, offset int64) (io.ReadCloser, error) {
 	p, err := l.path(key)
 	if err != nil {
 		return nil, err
@@ -95,6 +99,12 @@ func (l *LocalFS) Open(_ context.Context, key Key) (io.ReadCloser, error) {
 			return nil, fmt.Errorf("%w: %s", ErrNotFound, key)
 		}
 		return nil, err
+	}
+	if offset > 0 {
+		if _, err := f.Seek(offset, io.SeekStart); err != nil {
+			f.Close()
+			return nil, fmt.Errorf("seek %s: %w", key, err)
+		}
 	}
 	return f, nil
 }
