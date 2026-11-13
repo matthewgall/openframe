@@ -130,10 +130,15 @@ jobs:
       - name: Build
         run: npm run build
       - name: Commit check
+        # Run from the repo root: job-level working-directory is
+        # web/admin, and git pathspecs are relative to the step CWD
+        # (from web/admin the old "web/admin/dist" did not exist, so
+        # git errored and the check warned on EVERY run).
+        working-directory: .
         run: |
           # The embedded dist/ is committed; CI verifies the build is
           # reproducible from the checked-in sources.
-          if ! git diff --exit-code --quiet web/admin/dist; then
+          if ! git diff --exit-code --quiet -- web/admin/dist; then
             echo "::warning::web/admin/dist is out of date; run 'make web' and commit"
           fi
       - uses: actions/upload-artifact@v7
