@@ -65,21 +65,25 @@ jobs:
           GOOS: linux
           GOARCH: ${{ matrix.arch }}
         run: |
-          go build -ldflags "-X github.com/matthewgall/openframe/internal/version.Commit=${GITHUB_SHA::12}" \
-            -o /tmp/openframe ./cmd/openframe
-      # Only the host-arch binary can execute on the runner; the other
+          LDFLAGS="-X github.com/matthewgall/openframe/internal/version.Commit=${GITHUB_SHA::12}"
+          go build -ldflags "$LDFLAGS" -o /tmp/openframe ./cmd/openframe
+          go build -ldflags "$LDFLAGS" -o /tmp/openframe-updater ./cmd/openframe-updater
+      # Only the host-arch binaries can execute on the runner; the other
       # matrix entry is cross-compiled and verified by the build itself.
-      - name: "Smoke: version"
-        if: matrix.arch == 'amd64'
-        run: /tmp/openframe version
-      - name: "Smoke: doctor --json parses"
+      - name: "Smoke: frame version + doctor"
         if: matrix.arch == 'amd64'
         run: |
+          /tmp/openframe version
           /tmp/openframe doctor --json | grep -q '"checks"'
+      - name: "Smoke: updater version"
+        if: matrix.arch == 'amd64'
+        run: /tmp/openframe-updater --version
       - uses: actions/upload-artifact@v4
         with:
           name: openframe-linux-${{ matrix.arch }}
-          path: /tmp/openframe
+          path: |
+            /tmp/openframe
+            /tmp/openframe-updater
 
   # --- Web UI build -------------------------------------------------------
   web:

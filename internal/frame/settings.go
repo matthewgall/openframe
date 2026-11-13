@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/matthewgall/openframe/internal/config"
+	"github.com/matthewgall/openframe/internal/updater"
 )
 
 // Local settings (M4 settings screen) override the config file for
@@ -25,6 +26,7 @@ const (
 	settingSleepOff          = "sleep_off"
 	settingShowCaption       = "show_caption"
 	settingShowClock         = "show_clock"
+	settingUpdateChannel     = "update_channel"
 )
 
 // LoadLocalSettings reads the persisted overrides. All fields are
@@ -103,6 +105,12 @@ func applyLocalSettings(c *config.FrameConfig, s map[string]string) error {
 			return fmt.Errorf("local setting %s: %q invalid", settingShowClock, v)
 		}
 		c.Slideshow.ShowClock = b
+	}
+	if v, ok := s[settingUpdateChannel]; ok {
+		if !updater.ValidChannel(v) {
+			return fmt.Errorf("local setting %s: %q invalid", settingUpdateChannel, v)
+		}
+		c.Update.Channel = v
 	}
 	return nil
 }

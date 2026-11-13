@@ -67,6 +67,10 @@ type Config struct {
 	Orientation          string `json:"orientation,omitempty"`
 	ShowClock            *bool  `json:"show_clock,omitempty"`
 	ShowCaptions         *bool  `json:"show_captions,omitempty"`
+
+	// UpdateChannel (M6, spec §14): the release channel this frame
+	// updates from, administered in the admin UI. Empty = unset.
+	UpdateChannel string `json:"update_channel,omitempty"`
 }
 
 type manifestAlbum struct {

@@ -27,7 +27,7 @@ type HealthReport struct {
 	DisplayStatus    string   `json:"display_status"` // active|asleep|off|error
 	ErrorCount24h    int      `json:"error_count_24h"`
 	RecentErrors     []string `json:"recent_errors"` // short summaries
-	UpdateState      string   `json:"update_state"`  // unknown|idle|downloading|installing|activating|verifying|failed|rolled_back
+	UpdateState      string   `json:"update_state"`  // none|updating|update_failed|rollback|unknown (M6 updater states, reported by the frame from the updater's state file)
 }
 
 // Sanitize bounds untrusted frame input before storage.
@@ -238,11 +238,11 @@ func (s *Store) LastHeartbeat(ctx context.Context, deviceID string) (*time.Time,
 func DeriveStatus(lastHeartbeat *time.Time, h *HealthReport, now time.Time) string {
 	if h != nil {
 		switch h.UpdateState {
-		case "downloading", "installing", "activating", "verifying":
+		case "updating":
 			return StatusUpdating
-		case "failed":
+		case "update_failed":
 			return StatusUpdateFailed
-		case "rolled_back":
+		case "rollback":
 			return StatusRolledBack
 		}
 	}

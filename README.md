@@ -14,8 +14,8 @@ frame application and (from milestone 6) the signed auto-updater.
 
 ## Status
 
-OpenFrame is under active development in milestones. **Milestone 5
-(Multi-frame management)** is complete:
+OpenFrame is under active development in milestones. **Milestone 6
+(Secure updater)** is complete:
 
 | Milestone | Scope | Status |
 |---|---|---|
@@ -24,8 +24,7 @@ OpenFrame is under active development in milestones. **Milestone 5
 | 3 | Offline-first synchronisation: manifests, ETags, download queue, atomic activation | ✅ complete |
 | 4 | Touchscreen interface: DRM/KMS renderer, slideshow, gallery, search, settings, touch, sleep, thermal | ✅ complete (hardware validation pending) |
 | 5 | Multi-frame management: pairing protocol, health reporting, per-frame config, admin dashboard | ✅ complete |
-| 6 | Secure updater: A/B slots, signed releases, rollback, channels | planned |
-| 6 | Secure updater: A/B slots, signed releases, rollback, channels | planned |
+| 6 | Secure updater: A/B slots, signed releases, rollback, channels, staged rollout, admin releases | ✅ complete (hardware validation pending) |
 | 7 | Production hardening: backups, security review, long-run reliability | planned |
 
 See [docs/architecture/overview.md](docs/architecture/overview.md) for the
@@ -39,7 +38,10 @@ openframe frame     # run the frame application (headless renderer in M1)
 openframe pair      # device identity + pairing state and next steps
 openframe doctor    # diagnose the local system (human or --json)
 openframe status    # show local OpenFrame status
+openframe update    # frame-side update ops: status | check | request | reset | set-channel
 openframe version   # print version information (--json)
+
+openframe-updater   # root A/B slot updater (separate binary, M6)
 ```
 
 ## Quickstart (development)
@@ -183,8 +185,22 @@ Every key can be set via environment: the YAML path becomes an uppercased
 │   │                         #        M4: local settings; M5: server config summary)
 │   ├── credential            # M5: device credential (0600, written atomically)
 │   └── photos/               # M3: content-addressed photo cache
-└── updates/                  # M6: updater state
+└── updates/                  # M6: updater state.json + downloaded artifacts
 ```
+
+The updater's **install root** (A/B binary slots, the `current`
+symlink and the device-pinned trust file) is separate from the data
+dir and defaults to `/opt/openframe`:
+
+```
+/opt/openframe/
+├── current        -> slots/a/openframe           (atomic activation target)
+├── slots/a/openframe, slots/b/openframe         (fixed A/B slots)
+└── trust/trusted-keys.json                        (device-pinned Ed25519 keys)
+```
+
+Slot versions live in `state.json`, not in directory names. See
+[docs/updater/deployment.md](docs/updater/deployment.md).
 
 ## Running the frame (M4–M5)
 
@@ -207,6 +223,28 @@ commits, pure Go, no X11/Wayland/SDL). An unpaired frame shows the
 pairing screen; pairing and day-to-day operation are documented under
 [Pairing a frame](#pairing-a-frame-m5).
 
+## Auto-update (M6)
+
+The updater is a **separate root binary** — the frame never updates
+itself. Releases are Ed25519-signed; trust roots are pinned on the
+device, never served by the release server; activation is one atomic
+symlink rename over an A/B slot pair, and every failure path ends in
+an offline rollback.
+
+- Upload a signed release in the admin UI (Releases), approve it, and
+  expand the rollout (allow-listed devices or a stable percentage).
+- Per-frame channel: admin UI (per device) or on-device
+  `openframe update set-channel beta`.
+- Frame-side read-only ops: `openframe update status|check` (check
+  verifies the release against the pinned keys before reporting).
+- Deployment layout, systemd units and operations (rollback, key
+  rotation): [docs/updater/deployment.md](docs/updater/deployment.md)
+- The complete trust and anti-rollback model, with its test matrix:
+  [docs/updater/trust-model.md](docs/updater/trust-model.md)
+
+An unavailable update server never affects the slideshow or
+synchronisation.
+
 ## Building
 
 ```bash
@@ -226,6 +264,7 @@ plain `CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build`.
 
 ```
 cmd/openframe/          CLI entry point
+  openframe-updater/    root A/B slot updater (M6)
 internal/
   cli/                  command implementations
   config/               YAML + env configuration
@@ -248,7 +287,7 @@ internal/
   platform/             host introspection (doctor)
   protocol/             wire protocol version constants
   server/               management server
-  updater/              M6 boundary (update coordinator)
+  updater/              M6 release metadata, trust store, verifier, slots, state, coordinator
   version/              build metadata
 migrations/             embedded SQL migrations (server/, frame/)
 web/
@@ -265,7 +304,9 @@ docs/                   architecture, API, hardware, security, ADRs
 - [REST API conventions](docs/api/overview.md)
 - [Development guide](docs/development.md)
 - [Hardware: Raspberry Pi 3B+](docs/hardware/pi-3b-plus.md)
-- [Threat model (skeleton)](docs/security/threat-model.md)
+- [Threat model](docs/security/threat-model.md)
+- [Updater trust model](docs/updater/trust-model.md)
+- [Updater deployment + operations](docs/updater/deployment.md)
 - [Architecture decision records](docs/adr/README.md)
 
 ## License

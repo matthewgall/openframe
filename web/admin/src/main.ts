@@ -6,6 +6,7 @@ import { renderAudit } from './views/audit';
 import { renderDashboard } from './views/dashboard';
 import { renderFrames } from './views/frames';
 import { renderLibrary } from './views/library';
+import { renderReleases } from './views/releases';
 import { renderUsers } from './views/users';
 
 // --- Section registry ---------------------------------------------------
@@ -31,20 +32,7 @@ const sections: Section[] = [
     adminOnly: true,
     render: renderAudit,
   },
-  {
-    id: 'releases',
-    title: 'Releases',
-    badge: 'M6',
-    adminOnly: true,
-    render: (el) => {
-      const card = h('div', { class: 'card placeholder' });
-      card.append(
-        h('div', { class: 'milestone' }, 'Releases — arrives in Milestone 6'),
-        h('div', {}, 'Signed releases, channels, rollout progress, deployments and rollbacks.'),
-      );
-      el.append(card);
-    },
-  },
+  { id: 'releases', title: 'Releases', badge: 'M6', adminOnly: true, render: renderReleases },
 ];
 
 // --- Login view ------------------------------------------------------------

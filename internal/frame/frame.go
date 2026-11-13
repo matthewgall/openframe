@@ -32,8 +32,9 @@ const (
 	StateKeyRunning       = "running"        // "true"/"false"
 	StateKeyLastHeartbeat = "last_heartbeat" // RFC3339Nano UTC
 	StateKeyAppVersion    = "app_version"
-	StateKeyDeviceName    = "device_name"   // server-assigned name (M3 manifest config)
-	StateKeyServerConfig  = "server_config" // M5: summary of the last server config
+	StateKeyDeviceName    = "device_name"    // server-assigned name (M3 manifest config)
+	StateKeyServerConfig  = "server_config"  // M5: summary of the last server config
+	StateKeyUpdateChannel = "update_channel" // M6: effective update channel (read by the root updater)
 )
 
 // heartbeatInterval is how often the agent records a live heartbeat into

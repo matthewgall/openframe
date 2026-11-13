@@ -15,6 +15,7 @@ import (
 	"github.com/matthewgall/openframe/internal/server/devices"
 	"github.com/matthewgall/openframe/internal/server/pairing"
 	"github.com/matthewgall/openframe/internal/server/photos"
+	"github.com/matthewgall/openframe/internal/server/releases"
 	"github.com/matthewgall/openframe/internal/server/storage"
 	"github.com/matthewgall/openframe/internal/server/users"
 )
@@ -36,6 +37,7 @@ type Server struct {
 	albumStore   *albums.Store
 	deviceStore  *devices.Store
 	pairingStore *pairing.Store
+	releaseStore *releases.Store
 	store        storage.Storage
 	auditRec     *audit.Recorder
 	loginLimiter *auth.RateLimiter
@@ -53,6 +55,7 @@ type Deps struct {
 	Albums       *albums.Store
 	Devices      *devices.Store
 	Pairing      *pairing.Store
+	Releases     *releases.Store
 	Storage      storage.Storage
 	Audit        *audit.Recorder
 	LoginLimiter *auth.RateLimiter
@@ -71,6 +74,7 @@ func New(d Deps) (*Server, error) {
 		albumStore:   d.Albums,
 		deviceStore:  d.Devices,
 		pairingStore: d.Pairing,
+		releaseStore: d.Releases,
 		store:        d.Storage,
 		auditRec:     d.Audit,
 		loginLimiter: d.LoginLimiter,
@@ -96,6 +100,13 @@ func (s *Server) Router() http.Handler {
 		// rate-limited per source address in the pairing store.
 		v1.Post("/devices/pair-challenges", s.handlePairChallenge)
 		v1.Post("/devices/pair-status", s.handlePairStatus)
+
+		// Release hosting (M6, spec §14): frames fetch signed release
+		// metadata and artifacts. Public by design — releases are
+		// self-authenticating (signed against device-pinned keys) and
+		// an unavailable release endpoint must never gate sync.
+		v1.Get("/releases/{channel}/latest.json", s.handleLatestRelease)
+		v1.Get("/releases/{version}/artifact", s.handleReleaseArtifact)
 
 		// Frame synchronisation API (M3, spec §9): authenticated by
 		// device credential (Authorization: Bearer <token>), not by the
@@ -158,6 +169,13 @@ func (s *Server) Router() http.Handler {
 			g.With(requireAdmin).Post("/pairing/{id}/reject", s.handleRejectPairing)
 			g.With(requireAdmin).Post("/photos/{id}/priority", s.handleSetPhotoPriority)
 			g.With(requireAdmin).Post("/albums/{id}/priority", s.handleSetAlbumPriority)
+
+			g.With(requireAdmin).Get("/releases", s.handleListReleases)
+			g.With(requireAdmin).Post("/releases", s.handleUploadRelease)
+			g.With(requireAdmin).Post("/releases/{version}/approve", s.handleApproveRelease)
+			g.With(requireAdmin).Post("/releases/{version}/pause", s.handlePauseRelease)
+			g.With(requireAdmin).Put("/releases/{version}/rollout", s.handleSetReleaseRollout)
+			g.With(requireAdmin).Delete("/releases/{version}", s.handleDeleteRelease)
 
 			g.With(requireAdmin).Get("/audit", s.handleAudit)
 			g.Get("/stats", s.handleStats)

@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/matthewgall/openframe/internal/platform"
+	"github.com/matthewgall/openframe/internal/updater"
 	"github.com/matthewgall/openframe/internal/version"
 )
 
@@ -86,15 +89,17 @@ func (f *Frame) buildHealth(ctx context.Context) healthPayload {
 	h := healthPayload{
 		Version:       version.Version,
 		UptimeSeconds: int64(time.Since(f.started).Seconds()),
-		UpdateState:   "unknown", // the M6 updater takes over this field
+		UpdateState:   f.updateStatus(),
 	}
 
-	if t, ok := f.engine.LastAttempt(ctx); ok {
-		h.LastSyncAt = t.UTC().Format(time.RFC3339)
+	if f.engine != nil {
+		if t, ok := f.engine.LastAttempt(ctx); ok {
+			h.LastSyncAt = t.UTC().Format(time.RFC3339)
+		}
+		h.LastSyncOK = f.engine.LastError(ctx) == ""
+		h.ManifestRevision = f.engine.ActiveRevision(ctx)
+		h.PendingDownloads = f.engine.PendingDownloads(ctx)
 	}
-	h.LastSyncOK = f.engine.LastError(ctx) == ""
-	h.ManifestRevision = f.engine.ActiveRevision(ctx)
-	h.PendingDownloads = f.engine.PendingDownloads(ctx)
 
 	eff := f.effectiveConfig()
 	_, frameDir, _ := eff.Paths()
@@ -130,6 +135,24 @@ func (f *Frame) buildHealth(ctx context.Context) healthPayload {
 	}
 	h.ErrorCount24h = len(h.RecentErrors)
 	return h
+}
+
+// updateStatus reads the updater's state file (M6). The frame only
+// reads it (unprivileged); the root openframe-updater writes it. A
+// missing file means no updater state is visible to this frame (dev
+// headless runs) and reports "none".
+func (f *Frame) updateStatus() string {
+	eff := f.effectiveConfig()
+	_, _, updatesDir := eff.Paths()
+	b, err := os.ReadFile(filepath.Join(updatesDir, updater.StateFileName))
+	if err != nil {
+		return "none"
+	}
+	var st updater.State
+	if err := json.Unmarshal(b, &st); err != nil {
+		return "unknown"
+	}
+	return st.UpdateStatusForHealth()
 }
 
 // heartbeatComponent is the frame's 30s pulse (M1) upgraded to the

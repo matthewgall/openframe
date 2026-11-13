@@ -1,6 +1,7 @@
 # ADR-0007: Release signing — custom Ed25519 metadata (TUF evaluated)
 
-**Status:** accepted (milestone 1); implementation in M6
+**Status:** implemented (milestone 6) — see `docs/updater/trust-model.md`
+and the `internal/updater/` test matrix
 
 ## Context
 

@@ -119,6 +119,7 @@ export interface FrameConfig {
   orientation: string; // normal | rotate90 | rotate180 | rotate270
   show_clock: boolean | null;
   show_captions: boolean | null;
+  update_channel: string; // M6: stable | beta | development | '' (unset)
 }
 
 export interface FrameConfigDoc {
@@ -493,4 +494,87 @@ export function getStats(): Promise<Stats> {
 
 export function getHealth(): Promise<Health> {
   return request('GET', '/healthz');
+}
+
+// --- Releases (M6, spec §14) -------------------------------------------------
+
+export type ReleaseStatus = 'staged' | 'approved' | 'paused';
+
+export interface ReleaseInfo {
+  version: string;
+  channel: string;
+  os: string;
+  arch: string;
+  artifact_sha256: string;
+  artifact_size: number;
+  status: ReleaseStatus;
+  is_latest: boolean;
+  rollout_percent: number;
+  rollout_devices: string[];
+  released_at: string;
+  expires_at: string;
+  min_protocol_version: number;
+  min_schema_version: number;
+  is_rollback: boolean;
+  signer_key_id: string;
+  has_artifact: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ReleasePlatform {
+  channel: string;
+  os: string;
+  arch: string;
+}
+
+function releaseQ(p: ReleasePlatform): string {
+  return `?channel=${encodeURIComponent(p.channel)}&os=${encodeURIComponent(p.os)}&arch=${encodeURIComponent(p.arch)}`;
+}
+
+export function listReleases(): Promise<ReleaseInfo[]> {
+  return request('GET', '/api/v1/releases');
+}
+
+// uploadRelease posts multipart: 'metadata' (signed JSON text) +
+// 'artifact' (file). Custom fetch because request() is JSON-only.
+export async function uploadRelease(metadataJson: string, artifact: Blob): Promise<ReleaseInfo> {
+  const fd = new FormData();
+  fd.append('metadata', metadataJson);
+  fd.append('artifact', artifact, 'openframe');
+  const opts: RequestInit = { method: 'POST', credentials: 'same-origin', body: fd };
+  if (session.csrf) {
+    opts.headers = { 'X-CSRF-Token': session.csrf };
+  }
+  const res = await fetch('/api/v1/releases', opts);
+  const text = await res.text();
+  let data: unknown = null;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = text;
+    }
+  }
+  if (!res.ok) {
+    const errBody = data as { error?: string; message?: string } | null;
+    throw new ApiError(res.status, errBody?.error ?? 'upload_failed', errBody?.message ?? `HTTP ${res.status}`);
+  }
+  return data as ReleaseInfo;
+}
+
+export function approveRelease(p: ReleasePlatform, version: string): Promise<ReleaseInfo> {
+  return request('POST', `/api/v1/releases/${encodeURIComponent(version)}/approve${releaseQ(p)}`, {});
+}
+
+export function pauseRelease(p: ReleasePlatform, version: string): Promise<ReleaseInfo> {
+  return request('POST', `/api/v1/releases/${encodeURIComponent(version)}/pause${releaseQ(p)}`, {});
+}
+
+export function setReleaseRollout(p: ReleasePlatform, version: string, percent: number, devices: string[]): Promise<ReleaseInfo> {
+  return request('PUT', `/api/v1/releases/${encodeURIComponent(version)}/rollout${releaseQ(p)}`, { percent, devices });
+}
+
+export function deleteRelease(p: ReleasePlatform, version: string): Promise<void> {
+  return request('DELETE', `/api/v1/releases/${encodeURIComponent(version)}${releaseQ(p)}`, {});
 }

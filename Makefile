@@ -20,19 +20,26 @@ all: fmt-check vet test build
 
 ## --- Build ------------------------------------------------------------
 
+# Both binaries ship in every release (frame + privileged updater, M6).
+CMDS := openframe openframe-updater
+
 .PHONY: build
 build: ## Build openframe for the host platform
-	CGO_ENABLED=0 $(GO) build -ldflags "$(LDFLAGS)" -o $(BIN)/openframe ./cmd/openframe
+	@for c in $(CMDS); do \
+		CGO_ENABLED=0 $(GO) build -ldflags "$(LDFLAGS)" -o $(BIN)/$$c ./cmd/$$c; \
+	done
 
 .PHONY: build-all
-build-all: ## Cross-build linux/amd64 and linux/arm64
-	CGO_ENABLED=0 GOOS=$(GOOS_LINUX) GOARCH=amd64 $(GO) build -ldflags "$(LDFLAGS)" -o $(DIST)/openframe-linux-amd64/openframe ./cmd/openframe
-	CGO_ENABLED=0 GOOS=$(GOOS_LINUX) GOARCH=arm64 $(GO) build -ldflags "$(LDFLAGS)" -o $(DIST)/openframe-linux-arm64/openframe ./cmd/openframe
+build-all: ## Cross-build linux/amd64 and linux/arm64 (frame + updater)
+	@for c in $(CMDS); do \
+		CGO_ENABLED=0 GOOS=$(GOOS_LINUX) GOARCH=amd64 $(GO) build -ldflags "$(LDFLAGS)" -o $(DIST)/openframe-linux-amd64/$$c ./cmd/$$c; \
+		CGO_ENABLED=0 GOOS=$(GOOS_LINUX) GOARCH=arm64 $(GO) build -ldflags "$(LDFLAGS)" -o $(DIST)/openframe-linux-arm64/$$c ./cmd/$$c; \
+	done
 	$(MAKE) checksums
 
 .PHONY: checksums
-checksums: ## SHA-256 checksums for dist artifacts
-	cd $(DIST) && sha256sum openframe-linux-*/openframe > SHA256SUMS.txt
+checksums: ## SHA-256 checksums for dist artifacts (frame + updater)
+	cd $(DIST) && sha256sum openframe-linux-*/openframe openframe-linux-*/openframe-updater > SHA256SUMS.txt
 
 ## --- Web admin UI -------------------------------------------------------
 

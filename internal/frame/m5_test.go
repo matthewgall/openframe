@@ -423,7 +423,9 @@ func TestM5BuildHealth(t *testing.T) {
 		!strings.HasPrefix(h.RecentErrors[0], "sync:") {
 		t.Fatalf("errors = %+v", h)
 	}
-	if h.UpdateState != "unknown" {
-		t.Fatalf("update state = %q", h.UpdateState)
+	// M6: the frame reads the updater's state file; the test env has
+	// none, so the frame reports "none".
+	if h.UpdateState != "none" {
+		t.Fatalf("update state = %q, want none", h.UpdateState)
 	}
 }

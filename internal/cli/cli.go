@@ -1,7 +1,7 @@
 // Package cli implements the openframe command-line interface.
 //
 // The dispatcher is hand-rolled on net/flag rather than using a
-// framework (ADR-0004): OpenFrame has six flat commands, and a
+// framework (ADR-0004): OpenFrame has a small set of flat commands, and a
 // framework would add a dependency with no functional benefit.
 package cli
 
@@ -37,6 +37,7 @@ var commands = []command{
 	{"pair", "show or initialise frame pairing state", runPair},
 	{"doctor", "diagnose the local system and OpenFrame state", runDoctor},
 	{"status", "show local OpenFrame status", runStatus},
+	{"update", "frame-side update operations (status/check/request/reset)", runUpdate},
 	{"version", "print version information", runVersion},
 }
 

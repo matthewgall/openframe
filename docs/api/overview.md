@@ -158,7 +158,7 @@ device and derives the `status` shown in the admin UI:
 | `recently_seen` | seen, but outside the online window |
 | `offline` | never seen or stale beyond the window |
 | `sync_error` | latest report says the last sync failed (overlay on online/recently_seen) |
-| `updating` / `update_failed` / `rollback` | M6 updater states (reserved) |
+| `updating` / `update_failed` / `rollback` | M6 updater states — derived from `health.update_state`, override the heartbeat derivation |
 
 The same response carries `sync_request_seq`, which is how the admin's
 `POST /devices/{id}/sync` reaches the frame (see above).
@@ -247,10 +247,47 @@ document (name, slideshow interval/transition, sleep window,
 brightness, orientation, captions, clock, sync interval). Precedence on
 the frame is **local settings > server config > config file**.
 
-### Remaining planned endpoints (M6)
+## Milestone 6 — releases and update state
+
+Public (unauthenticated) release endpoints, served by the management
+server:
 
 ```
-/api/v1/releases/...                release metadata (M6)
+GET /api/v1/releases/latest.json?channel=&os=&arch=
+        envelope: { release: <exact signed bytes>, serving: { rollout_percent, rollout_devices } }
+GET /api/v1/releases/<version>/artifact?channel=&os=&arch=
+        the release binary (Range requests supported)
 ```
 
-Directional; exact shapes are specified in each milestone.
+The server stores the uploaded signed metadata **verbatim** and never
+re-serialises it; the `serving` block is unsigned operator policy that
+may change WHO receives a release, never WHAT (see
+[docs/updater/trust-model.md](../updater/trust-model.md)).
+
+Admin (session + CSRF, admin role):
+
+```
+POST   /api/v1/releases                    multipart: metadata (signed JSON) + artifact; lands as staged
+GET    /api/v1/releases                    list (version, channel, platform, status, rollout, signer, expiry)
+POST   /api/v1/releases/<version>/approve  staged → approved (becomes latest for its platform)
+POST   /api/v1/releases/<version>/pause    approved → paused (latest moves to next approved)
+PUT    /api/v1/releases/<version>/rollout  { percent, devices } — the serving override
+DELETE /api/v1/releases/<version>          staged or paused only (approved must pause first)
+```
+
+Releases are keyed by (version, channel, os, arch). A newer approved
+release replaces the latest pointer; pausing the latest re-exposes the
+next approved one. Uploads are rejected when the signed metadata is
+malformed, unsigned, or its artifact hash/size disagrees with the
+document.
+
+Update state in the device model:
+
+- `health.update_state` — `none | updating | update_failed | rollback
+  | unknown`, reported by the frame from the updater's state file.
+- Device status derivation: `updating` / `update_failed` /
+  `rollback` override the online/offline heartbeat derivation.
+- `config.update_channel` — per-frame release channel (validated:
+  `stable | beta | development`), delivered in the manifest and
+  persisted by the frame in its own DB (the root updater reads it
+  there).

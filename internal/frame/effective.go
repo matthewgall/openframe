@@ -9,6 +9,7 @@ import (
 	"github.com/matthewgall/openframe/internal/frame/sleep"
 	"github.com/matthewgall/openframe/internal/frame/sync"
 	"github.com/matthewgall/openframe/internal/frame/ui"
+	"github.com/matthewgall/openframe/internal/updater"
 )
 
 // Effective configuration precedence (M5, spec §6), highest first:
@@ -60,6 +61,17 @@ func (f *Frame) recomputeEffective(ctx context.Context) error {
 	f.effMu.Unlock()
 	if err != nil {
 		return fmt.Errorf("local settings: %w", err)
+	}
+
+	// Publish the effective update channel (M6, spec §14) for the
+	// root updater, which reads the frame DB directly. Resolved here
+	// so the precedence (local > server > file) is already applied.
+	channel := cfg.Frame.Update.Channel
+	if channel == "" {
+		channel = updater.ChannelStable
+	}
+	if err := setState(ctx, f.db, StateKeyUpdateChannel, channel); err != nil {
+		f.log.Warn("update channel state write failed", "error", err)
 	}
 
 	// Live-apply to the running pieces (outside effMu).
@@ -130,6 +142,9 @@ func overlayServerConfig(c *config.FrameConfig, sc sync.Config) {
 	if sc.ShowCaptions != nil {
 		c.Slideshow.ShowCaption = *sc.ShowCaptions
 	}
+	if sc.UpdateChannel != "" {
+		c.Update.Channel = sc.UpdateChannel
+	}
 }
 
 // applyEffectiveToUI pushes the effective config into the live UI
@@ -183,6 +198,9 @@ func formatServerConfig(c sync.Config) string {
 	}
 	if c.Brightness != nil {
 		parts = append(parts, fmt.Sprintf("brightness=%d", *c.Brightness))
+	}
+	if c.UpdateChannel != "" {
+		parts = append(parts, "channel="+c.UpdateChannel)
 	}
 	if len(parts) == 0 {
 		return "(empty)"

@@ -82,6 +82,11 @@ type Config struct {
 	Orientation          string `json:"orientation,omitempty"`
 	ShowClock            *bool  `json:"show_clock,omitempty"`
 	ShowCaptions         *bool  `json:"show_captions,omitempty"`
+
+	// UpdateChannel is the release channel for this frame's updater
+	// (M6, spec §14). Empty means "not set"; the frame persists the
+	// resolved value for the root updater to read.
+	UpdateChannel string `json:"update_channel,omitempty"`
 }
 
 // Manifest is the wire document.
@@ -160,6 +165,7 @@ func Build(
 	// change must not churn photo downloads).
 	mc := Config{Name: devName}
 	if frameCfg != nil {
+		mc.UpdateChannel = frameCfg.UpdateChannel
 		mc.SlideshowIntervalSec = frameCfg.SlideshowIntervalSec
 		mc.Transition = frameCfg.Transition
 		mc.TransitionDurationMS = frameCfg.TransitionDurationMS

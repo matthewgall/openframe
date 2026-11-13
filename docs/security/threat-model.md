@@ -32,8 +32,8 @@ Status legend: ✅ implemented & tested · 🟨 partial (scope noted) ·
 | T-04 | Malicious photograph upload | Magic-byte + decode validation (not just MIME); decoded dimension caps; bounded decode memory; EXIF sanitisation on derivatives; no execution of uploaded content anywhere | M2 | ✅ — JPEG/PNG/lossy-WebP accepted; HEIC & lossless/extended WebP rejected with 415 (ADR-0009); orientation applied; derivatives are re-encoded, EXIF-free JPEG |
 | T-05 | Compromised family account | Argon2id password hashing; session expiry + revocation; login rate limiting; admin-only recovery; audit log of admin actions; passkey-ready design | M2 | ✅ except passkeys — Argon2id (OWASP params), hashed sessions with TTL + revoke + revoke-all, per-IP & per-account login throttling, last-active-admin lockout, admin password reset, full audit trail |
 | T-06 | Compromised management server | Assume breach: no secrets beyond what the server legitimately holds; backups enable rebuild; frames keep operating offline; credentials revocable after rebuild | M7 (runbook) | ⬜ |
-| T-07 | Compromised release hosting | Signatures are verified against pinned device-side keys; tampered metadata/artifacts rejected; metadata expiry; anti-rollback | M6 | ⬜ |
-| T-08 | Update-signing key compromise | Key rotation scheme with pinned key set and explicit rotation releases; short-lived signing in CI via OIDC, never in PRs | M6 | ⬜ |
+| T-07 | Compromised release hosting | Signatures are verified against pinned device-side keys; tampered metadata/artifacts rejected; metadata expiry; anti-rollback | M6 | ✅ — verifier rejects every named failure (`ErrBadSignature`, `ErrUnknownSigner`, `ErrExpired`, `ErrNotBefore`, `ErrPlatformMismatch`, `ErrProtocolIncompat`, `ErrSchemaIncompat`, `ErrDowngrade`, `ErrArtifactHash`, `ErrArtifactSize`), each with a tamper test; trusted keys are device-pinned (`/opt/openframe/trust/trusted-keys.json`) and never served by the release server; the server stores and re-serves the exact signed bytes it was given; the unsigned `serving` block can only change WHO is rollout-eligible, never WHAT (version/digest/size are signed); unavailable update server never affects slideshow or sync |
+| T-08 | Update-signing key compromise | Key rotation scheme with pinned key set and explicit rotation releases; short-lived signing in CI via OIDC, never in PRs | M6 | ✅ — rotation is a signed event: a release may add a new trusted key only when signed by a key the device already trusts (`TrustedKeys.AddTrusted`, invalid new keys rejected with `ErrInvalidNewKey`); old keys stay trusted until explicitly removed, so rotation cannot be used to erase trust; the signing key never reaches the frame or the release server — only its public half is pinned; CI signing is tag-triggered with OIDC permissions (no PR-triggered minting) |
 | T-09 | Network interception | HTTPS everywhere; certificate verification (no InsecureSkipVerify); no secrets in URLs | M2+ | 🟨 — session cookies `HttpOnly`+`SameSite=Lax` (`Secure` when the public URL is HTTPS), CSRF synchronizer token on all mutations, login rate limiting; TLS itself is a deployment requirement (reverse proxy) and enforced in the M7 runbook |
 | T-10 | Database corruption | WAL + integrity_check in doctor; transactional migrations with checksums; backup/restore procedures | M1 (checks) / M7 (restore tests) | ✅ M1 scope |
 | T-11 | Path traversal | All user-controlled paths go through validated joins; no user input reaches exec or filesystem roots; static asset serving from a closed embedded FS | M1 (SPA) / M2 (uploads) | ✅ — SPA from embedded FS; storage keys are strict (hex hash / hash.variant) and path-validated; upload filenames are display metadata only, never filesystem keys |
@@ -87,6 +87,42 @@ Status legend: ✅ implemented & tested · 🟨 partial (scope noted) ·
   mislabel its own status. Status derivation (`online`/`offline`)
   is anchored on server-side heartbeat time, not the frame's
   self-reported uptime.
+
+## Notes (M6)
+
+- **The updater is the only root process and it is not trusted with
+  decisions — only with mechanics.** The release *decision* is made by
+  the verifier against the signed document; the coordinator's role is
+  to execute (download, verify artifact, install to the inactive
+  slot, stop service, swap the `current` symlink with one atomic
+  rename, verify the new binary is ready, commit or roll back). The
+  running binary is never overwritten in place: the A/B invariant
+  means a power cut at any point leaves either the old or the new
+  binary active, and boot-time reconcile (bounded to 3 attempts per
+  candidate, then 24h failure cooldown) converges offline without
+  contacting the server. Rollback is offline by construction.
+- **Rollout override vs. signed rollout.** The signed document
+  carries an initial rollout policy (operator intent at signing
+  time). The server may later serve a `serving` override (admin UI
+  "Rollout…"). The client verifies the document untouched, then
+  applies the override ONLY to the eligibility decision. An attacker
+  who can rewrite the envelope can therefore at most expose more
+  (or fewer) frames to an already-verified build — the artifact's
+  integrity and authenticity are unaffected.
+- **Per-frame channel lives in the frame DB.** The admin UI sets it
+  per device (validated server-side, pushed via the manifest, stored
+  by the frame); the CLI sets a local override
+  (`openframe update set-channel`, which wins, matching the normal
+  settings precedence). The root updater reads the frame DB
+  read-only. The `--channel` flag on the updater is a deployment-time
+  escape hatch that beats both.
+- **Update state is health-visible.** The frame reads the updater's
+  `state.json` (unprivileged, read-only) and reports
+  `update_status` (`none|updating|update_failed|rollback|unknown`)
+  in its heartbeat; the admin dashboard's device status is derived
+  from it (updating/failed/rollback override the online/offline
+  derivation). A frame that cannot read the file reports `none` and
+  keeps working — the updater is a separate concern by design.
 
 ## Standing rules
 

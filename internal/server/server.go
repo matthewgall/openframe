@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"path/filepath"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -32,6 +33,7 @@ import (
 	"github.com/matthewgall/openframe/internal/server/devices"
 	"github.com/matthewgall/openframe/internal/server/pairing"
 	"github.com/matthewgall/openframe/internal/server/photos"
+	"github.com/matthewgall/openframe/internal/server/releases"
 	"github.com/matthewgall/openframe/internal/server/storage"
 	"github.com/matthewgall/openframe/internal/server/users"
 	"github.com/matthewgall/openframe/internal/version"
@@ -64,6 +66,7 @@ func New(cfg *config.Config, log *slog.Logger, dbh *sql.DB) (*Server, error) {
 	}
 
 	userStore := users.NewStore(dbh)
+	serverDir, _, _ := cfg.Paths()
 	apiSrv, err := api.New(api.Deps{
 		Cfg:          cfg,
 		Log:          log,
@@ -74,6 +77,7 @@ func New(cfg *config.Config, log *slog.Logger, dbh *sql.DB) (*Server, error) {
 		Albums:       albums.NewStore(dbh),
 		Devices:      devices.NewStore(dbh),
 		Pairing:      pairing.NewStore(dbh),
+		Releases:     releases.NewStore(dbh, filepath.Join(serverDir, "releases")),
 		Storage:      fs,
 		Audit:        audit.NewRecorder(dbh, log),
 		LoginLimiter: auth.NewRateLimiter(time.Minute, 1024),

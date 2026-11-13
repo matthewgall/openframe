@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"os"
@@ -8,6 +10,9 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/matthewgall/openframe/internal/db"
 )
 
 // These tests exercise the real command implementations (including real
@@ -111,6 +116,64 @@ func TestPairInitialisesIdentity(t *testing.T) {
 	// unconfigured (M3 states: unconfigured | unpaired | paired).
 	if p.State != "unconfigured" {
 		t.Errorf("state = %q, want unconfigured", p.State)
+	}
+}
+
+func TestUpdateSetChannel(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENFRAME_DATA_DIR", dir)
+
+	// pair creates the frame DB (identity + agent_state).
+	if _, code := runCmd(t, "pair"); code != ExitOK {
+		t.Fatalf("pair code = %d", code)
+	}
+
+	// Set the channel locally.
+	out, code := runCmd(t, "update", "set-channel", "beta")
+	if code != ExitOK {
+		t.Fatalf("set-channel code = %d, out=%q", code, out)
+	}
+	if !strings.Contains(out, "beta") {
+		t.Fatalf("output missing beta: %q", out)
+	}
+
+	// Both rows are persisted: the durable local override and the
+	// state row the root updater reads (M6, spec §14).
+	dbPath := filepath.Join(dir, "frame", "frame.db")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	dbh, err := db.Open(ctx, dbPath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dbh.Close()
+	var v1, v2 string
+	if err := dbh.QueryRowContext(ctx,
+		"SELECT value FROM frame_settings WHERE key = 'update_channel'").Scan(&v1); err != nil {
+		t.Fatalf("frame_settings row: %v", err)
+	}
+	if err := dbh.QueryRowContext(ctx,
+		"SELECT value FROM agent_state WHERE key = 'update_channel'").Scan(&v2); err != nil {
+		t.Fatalf("agent_state row: %v", err)
+	}
+	if v1 != "beta" || v2 != "beta" {
+		t.Fatalf("rows = %q/%q, want beta/beta", v1, v2)
+	}
+
+	// Clearing removes the override (the state row keeps its last
+	// published value until the frame recomputes — acceptable: the
+	// frame owns that row in normal operation).
+	if out, code := runCmd(t, "update", "set-channel", ""); code != ExitOK {
+		t.Fatalf("clear code = %d, out=%q", code, out)
+	}
+	if err := dbh.QueryRowContext(ctx,
+		"SELECT value FROM frame_settings WHERE key = 'update_channel'").Scan(&v1); err != sql.ErrNoRows && err != nil {
+		t.Fatalf("frame_settings row after clear: %v", err)
+	}
+
+	// Invalid channels are rejected at the CLI.
+	if _, code := runCmd(t, "update", "set-channel", "nightly"); code == ExitOK {
+		t.Fatal("invalid channel accepted")
 	}
 }
 

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/matthewgall/openframe/internal/updater"
 )
 
 // FrameConfig is the administrator-managed configuration pushed to a
@@ -27,6 +29,11 @@ type FrameConfig struct {
 	Orientation          string `json:"orientation"`
 	ShowClock            *bool  `json:"show_clock"`
 	ShowCaptions         *bool  `json:"show_captions"`
+	// UpdateChannel is the release channel this frame updates from
+	// (M6, spec §14): stable | beta | development. Stored in the
+	// frame DB by the frame and read by the root updater; an empty
+	// value means "not set" (the updater defaults to stable).
+	UpdateChannel string `json:"update_channel"`
 }
 
 var validTransitions = map[string]bool{"none": true, "crossfade": true, "slide": true}
@@ -76,6 +83,9 @@ func (c *FrameConfig) Validate() error {
 		!strings.EqualFold(c.Orientation, "rotate180") &&
 		!strings.EqualFold(c.Orientation, "rotate270") {
 		return fmt.Errorf("config: invalid orientation %q", c.Orientation)
+	}
+	if c.UpdateChannel != "" && !updater.ValidChannel(c.UpdateChannel) {
+		return fmt.Errorf("config: invalid update_channel %q (want stable, beta or development)", c.UpdateChannel)
 	}
 	return nil
 }

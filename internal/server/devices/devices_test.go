@@ -80,11 +80,11 @@ func TestHealthReportAndStatus(t *testing.T) {
 		t.Fatalf("status = %q, want sync_error", st)
 	}
 
-	// Update states take precedence over everything.
+	// Update states (M6 vocabulary) take precedence over everything.
 	for state, want := range map[string]string{
-		"downloading": StatusUpdating, "installing": StatusUpdating,
-		"activating": StatusUpdating, "verifying": StatusUpdating,
-		"failed": StatusUpdateFailed, "rolled_back": StatusRolledBack,
+		"updating":      StatusUpdating,
+		"update_failed": StatusUpdateFailed,
+		"rollback":      StatusRolledBack,
 	} {
 		h3 := *h
 		h3.UpdateState = state

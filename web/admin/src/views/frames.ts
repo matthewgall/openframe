@@ -338,6 +338,9 @@ export function renderFrames(root: HTMLElement): void {
     const oriSel = h('select', { class: 'input' },
       ...['', 'normal', 'rotate90', 'rotate180', 'rotate270'].map((v) =>
         h('option', optAttrs(v, c.orientation || ''), v === '' ? '(frame default)' : v)));
+    const chanSel = h('select', { class: 'input' },
+      ...['', 'stable', 'beta', 'development'].map((v) =>
+        h('option', optAttrs(v, c.update_channel || ''), v === '' ? '(default: stable)' : v)));
 
     const sleepOn = h('input', { class: 'input', type: 'time', value: c.sleep_on || '' });
     const sleepOff = h('input', { class: 'input', type: 'time', value: c.sleep_off || '' });
@@ -361,6 +364,7 @@ export function renderFrames(root: HTMLElement): void {
         orientation: oriSel.value,
         show_clock: triState(c.show_clock, clockBox.checked),
         show_captions: triState(c.show_captions, capBox.checked),
+        update_channel: chanSel.value,
       };
       try {
         const res = await putDeviceConfig(detail.device.id, cfg);
@@ -382,6 +386,7 @@ export function renderFrames(root: HTMLElement): void {
         field('Sleep off', sleepOff),
         field('Show clock', checkboxRow(clockBox, 'on / off (empty checkbox = frame default)')),
         field('Show captions', checkboxRow(capBox, 'on / off (empty checkbox = frame default)')),
+        field('Update channel (M6)', chanSel),
       ),
       errEl,
       h('div', { class: 'modal-actions' }, save),
