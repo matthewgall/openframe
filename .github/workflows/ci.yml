@@ -10,7 +10,11 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: "1.26"
+  # Must match the `toolchain` directive in go.mod: CI runs with
+  # GOTOOLCHAIN=local, so the exact patch release is installed here.
+  # (A floating "1.26" resolves to whatever the runner image caches,
+  # which can drift from go.mod and change vuln-scan results.)
+  GO_VERSION: "1.26.11"
 
 jobs:
   # --- Format & static analysis -----------------------------------------

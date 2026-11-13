@@ -16,7 +16,8 @@ permissions:
   contents: write
 
 env:
-  GO_VERSION: "1.26"
+  # Must match the `toolchain` directive in go.mod (see ci.yml for why).
+  GO_VERSION: "1.26.11"
 
 jobs:
   release:
