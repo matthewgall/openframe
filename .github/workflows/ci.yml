@@ -78,7 +78,7 @@ jobs:
       - name: "Smoke: updater version"
         if: matrix.arch == 'amd64'
         run: /tmp/openframe-updater --version
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: openframe-linux-${{ matrix.arch }}
           path: |
@@ -108,7 +108,7 @@ jobs:
           if ! git diff --exit-code --quiet web/admin/dist; then
             echo "::warning::web/admin/dist is out of date; run 'make web' and commit"
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: openframe-admin-dist
           path: web/admin/dist
