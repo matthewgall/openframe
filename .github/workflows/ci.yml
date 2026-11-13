@@ -17,11 +17,12 @@ env:
   GO_VERSION: "1.26.11"
 
 jobs:
-  # --- Format, vet, tests -------------------------------------------------
-  # One runner: fmt/vet/test all share the same module cache, and the
-  # suite (~4 min) dominates wall time either way.
-  check:
-    name: fmt + vet + tests (race)
+  # --- Tests (the gate) ----------------------------------------------------
+  # One runner: fmt/vet/test share the same module cache. Every build
+  # job below waits on this — artifacts are only produced from code
+  # that passed the full suite.
+  test:
+    name: tests (gofmt + vet + race)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -39,6 +40,9 @@ jobs:
         run: go test ./... -race -count=1
 
   # --- Cross-builds --------------------------------------------------------
+  # Depends on the test gate: binaries are only built (and uploaded)
+  # from code that passed the suite above.
+  #
   # Every supported target in ONE job: the codebase is pure Go
   # (CGO_ENABLED=0, no cgo), so all of these are plain cross-compiles.
   # A single warm-cache runner building 20 small binaries beats 10
@@ -46,6 +50,7 @@ jobs:
   # ARM is offered as v6 (32-bit Pi Zero/1) and v7 (32-bit Pi 3/4).
   build:
     name: cross-compile (all targets)
+    needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -95,6 +100,7 @@ jobs:
   # --- Web UI build -------------------------------------------------------
   web:
     name: admin SPA build
+    needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -130,6 +136,7 @@ jobs:
   # --- Dependency audit ----------------------------------------------------
   vuln:
     name: govulncheck
+    needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
