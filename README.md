@@ -14,8 +14,8 @@ frame application and (from milestone 6) the signed auto-updater.
 
 ## Status
 
-OpenFrame is under active development in milestones. **Milestone 4
-(Touchscreen interface)** is complete:
+OpenFrame is under active development in milestones. **Milestone 5
+(Multi-frame management)** is complete:
 
 | Milestone | Scope | Status |
 |---|---|---|
@@ -23,7 +23,8 @@ OpenFrame is under active development in milestones. **Milestone 4
 | 2 | Server MVP: auth, users, photo upload + derivatives, albums, web UI | ✅ complete |
 | 3 | Offline-first synchronisation: manifests, ETags, download queue, atomic activation | ✅ complete |
 | 4 | Touchscreen interface: DRM/KMS renderer, slideshow, gallery, search, settings, touch, sleep, thermal | ✅ complete (hardware validation pending) |
-| 5 | Multi-frame management: pairing, assignments, health, admin dashboard | planned |
+| 5 | Multi-frame management: pairing protocol, health reporting, per-frame config, admin dashboard | ✅ complete |
+| 6 | Secure updater: A/B slots, signed releases, rollback, channels | planned |
 | 6 | Secure updater: A/B slots, signed releases, rollback, channels | planned |
 | 7 | Production hardening: backups, security review, long-run reliability | planned |
 
@@ -71,35 +72,39 @@ Sign in at http://localhost:8080 with that password (change it via the
 account menu afterwards). This is the single documented exception to the
 “no secrets in logs” rule — see `docs/security/threat-model.md` (T-14).
 
-### Pairing a frame (M3)
+### Pairing a frame (M5)
 
-1. On the frame, get (or create) its stable device identity:
+A frame pairs itself — no one types a token anywhere:
 
-   ```bash
-   openframe pair    # prints the device id + what to do next
-   ```
+1. Point the frame at the server (`frame.server_url` in config) and
+   start it: `openframe frame`. The frame shows a **pairing screen**
+   with an 8-character code.
+2. In the admin UI, open **Frames → pending requests** and enter the
+   code. Approving registers the device (with the name the frame
+   offered) and issues its credential.
+3. The frame detects the approval within ~10 s, claims the credential
+   (one-time — the server nulls it after the first claim) and starts
+   syncing. The credential is stored in a 0600 file in the frame state
+   directory; the server stores only its SHA-256 hash.
 
-2. In the admin UI (or API), register the device with that id on the
-   Frames page, then **issue a credential**. The token is displayed
-   exactly once — the server stores only its SHA-256 hash.
+The manual path still works for scripted deployments: register the
+device with `openframe pair`'s id on the Frames page, issue a
+credential from the UI, and set `frame.device_token` — a config token
+always wins over a paired one.
 
-3. Point the frame at the server and give it the token:
+Once paired, the frame polls the conditional manifest (ETag/304),
+downloads assigned photo derivatives into the content-addressed cache,
+verifies SHA-256, and atomically activates new collections. While
+offline it keeps displaying the last good collection; local
+favourites are queued and replayed on reconnect.
 
-   ```bash
-   # config (or environment)
-   frame:
-     server_url: https://frame.example.com
-     device_token: ofd_xxx        # OPENFRAME_FRAME_DEVICE_TOKEN
-   ```
-
-4. `openframe frame` now syncs: it polls the conditional manifest
-   (ETag/304), downloads assigned photo derivatives into the
-   content-addressed cache, verifies SHA-256, and atomically activates
-   new collections. While offline it keeps displaying the last good
-   collection; local favourites are queued and replayed on reconnect.
-
-Unassigned frames show their idle screen; `openframe status` reports
-pairing state, active collection revision and sync health.
+The admin UI's **Frames** page also shows live health (last seen,
+sync state, disk/memory/temperature, display driver), lets you rename
+a frame, **trigger a sync** (delivered on the frame's next heartbeat —
+the server never initiates connections), and set **per-frame
+configuration** (slideshow interval, transition, sleep window,
+brightness, orientation, clock). Precedence on the frame:
+local settings > server config > config file.
 
 ## Configuration
 
@@ -175,12 +180,13 @@ Every key can be set via environment: the YAML path becomes an uppercased
 │       └── derivatives/<sha256>.<variant>
 ├── frame/
 │   ├── frame.db              # frame SQLite (identity, state; M3: sync/cache;
-│   │                         #        M4: local settings overrides)
+│   │                         #        M4: local settings; M5: server config summary)
+│   ├── credential            # M5: device credential (0600, written atomically)
 │   └── photos/               # M3: content-addressed photo cache
 └── updates/                  # M6: updater state
 ```
 
-## Running the frame (M4)
+## Running the frame (M4–M5)
 
 ```bash
 openframe frame        # on the Pi: driver=auto picks the DRM panel
@@ -192,12 +198,14 @@ The frame UI is touch-first (swipe/tap/double-tap/hold). On development
 machines without a panel, set `frame.display.driver: headless` and
 `frame.display.snapshot_dir`: every presented frame is written to
 `<snapshot_dir>/latest.png` (plus a small timestamped ring), so the
-complete UI — slideshow, gallery, search, settings, empty states — is
-observable without hardware (the spec's "development renderer").
+complete UI — pairing screen, slideshow, gallery, search, settings,
+empty states — is observable without hardware (the spec's "development
+renderer").
 
 On the Pi the DRM renderer takes the panel directly (KMS atomic
-commits, pure Go, no X11/Wayland/SDL). Pairing and day-to-day
-operation are documented under [Pairing a frame](#pairing-a-frame-m3).
+commits, pure Go, no X11/Wayland/SDL). An unpaired frame shows the
+pairing screen; pairing and day-to-day operation are documented under
+[Pairing a frame](#pairing-a-frame-m5).
 
 ## Building
 
@@ -232,7 +240,10 @@ internal/
   frame/touch/          evdev reader + gesture recognizer (M4)
   frame/sleep/          daily display sleep schedule (M4)
   frame/thermal/        overheat monitor (M4)
-  server/manifest/      frame manifest builder (M3)
+  frame/pairing/        M5 pairing client (challenge/poll/claim)
+  server/pairing/       M5 pairing store (codes, rate limits, one-time claims)
+  server/devices/       M3+M5 credentials, health, per-frame config
+  server/manifest/      frame manifest builder (M3, M5 config block)
   logging/              slog setup
   platform/             host introspection (doctor)
   protocol/             wire protocol version constants

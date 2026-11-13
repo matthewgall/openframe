@@ -74,6 +74,9 @@ func runStatus(args []string) int {
 	if st.DeviceID != "" {
 		fmt.Printf("  pairing:  %s\n", st.PairingStatus)
 	}
+	if st.ServerConfig != "" {
+		fmt.Printf("  server config: %s\n", st.ServerConfig)
+	}
 	if st.LastSyncSuccess != nil {
 		fmt.Printf("  last sync success: %s\n", st.LastSyncSuccess.UTC().Format(time.RFC3339))
 	}

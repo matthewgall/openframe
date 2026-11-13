@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	gosync "sync"
 	"time"
 
 	"github.com/matthewgall/openframe/internal/config"
@@ -31,7 +32,8 @@ const (
 	StateKeyRunning       = "running"        // "true"/"false"
 	StateKeyLastHeartbeat = "last_heartbeat" // RFC3339Nano UTC
 	StateKeyAppVersion    = "app_version"
-	StateKeyDeviceName    = "device_name" // server-assigned name (M3 manifest config)
+	StateKeyDeviceName    = "device_name"   // server-assigned name (M3 manifest config)
+	StateKeyServerConfig  = "server_config" // M5: summary of the last server config
 )
 
 // heartbeatInterval is how often the agent records a live heartbeat into
@@ -51,6 +53,19 @@ type Frame struct {
 	cache    *cache.Store
 	engine   *sync.Engine
 	ui       *uiState
+
+	// M5 effective config (config file < server < local).
+	effMu        gosync.RWMutex
+	baseCfg      config.Config // pristine config-file values
+	serverCfg    sync.Config   // last server-pushed per-frame config
+	hasServerCfg bool
+
+	// M5 health: bounded recent-error summary + present-error tracking.
+	errors         *errorRing
+	lastPresentErr string
+
+	// M5 pairing: persisted credential file path.
+	credPath string
 }
 
 // New wires a Frame. Callers own the db and driver lifetimes; Run stops
@@ -70,13 +85,17 @@ func New(cfg *config.Config, log *slog.Logger, dbh *sql.DB, drv display.Driver) 
 		log = slog.Default()
 	}
 	log = logging.NewComponent(log, "frame")
+	_, frameDir, _ := cfg.Paths()
 	return &Frame{
-		cfg:     cfg,
-		log:     log,
-		db:      dbh,
-		drv:     drv,
-		started: time.Now(),
-		runner:  newRunner(log),
+		cfg:      cfg,
+		log:      log,
+		db:       dbh,
+		drv:      drv,
+		started:  time.Now(),
+		runner:   newRunner(log),
+		baseCfg:  *cfg,
+		errors:   &errorRing{},
+		credPath: filepath.Join(frameDir, credentialFileName),
 	}, nil
 }
 
@@ -142,15 +161,15 @@ func (f *Frame) Run(ctx context.Context) error {
 		return fmt.Errorf("open photo cache: %w", err)
 	}
 	f.cache = c
-	eng, err := sync.New(identity, f.cfg.Frame.ServerURL, f.cfg.Frame.DeviceToken,
+	token := f.resolveToken()
+	eng, err := sync.New(identity, f.cfg.Frame.ServerURL, token,
 		f.log, f.db, c, &f.cfg.Frame)
 	if err != nil {
 		return fmt.Errorf("build sync engine: %w", err)
 	}
 	f.engine = eng
 	if !eng.Paired() {
-		log.Info("frame not paired; running display-only",
-			"hint", "set frame.device_token (see `openframe pair`) to synchronise")
+		log.Info("frame not paired; the pairing flow (or manual credential) will connect it")
 	}
 
 	// M4: display stack (UI engine, touch, sleep, thermal). The UI
@@ -161,8 +180,16 @@ func (f *Frame) Run(ctx context.Context) error {
 		return fmt.Errorf("build display: %w", err)
 	}
 
+	// M5: server-pushed per-frame config (spec §6) applies to the UI,
+	// sleep schedule and sync interval without a restart.
+	eng.OnConfig(f.applyServerConfig)
+	if err := f.recomputeEffective(ctx); err != nil {
+		return fmt.Errorf("effective config: %w", err)
+	}
+
 	components := []Component{
 		{Name: "heartbeat", Run: f.heartbeatComponent},
+		{Name: "pairing", Run: f.pairingComponent},
 		{Name: "ui", Run: f.uiComponent},
 		{Name: "touch", Run: f.touchComponent},
 		{Name: "sleep", Run: f.sleepComponent},
@@ -185,21 +212,33 @@ func (f *Frame) Run(ctx context.Context) error {
 	return err
 }
 
+// resolveToken picks the device credential: an operator-pinned
+// frame.device_token (config/env) wins; otherwise the credential
+// persisted by the pairing flow (M5).
+func (f *Frame) resolveToken() string {
+	if f.cfg.Frame.DeviceToken != "" {
+		return f.cfg.Frame.DeviceToken
+	}
+	cred, err := LoadCredential(f.credPath)
+	if err != nil {
+		f.log.Warn("credential file unreadable; running unpaired", "error", err)
+		return ""
+	}
+	if cred == nil {
+		return ""
+	}
+	if cred.DeviceID != f.identity {
+		f.log.Warn("credential belongs to a different identity; running unpaired",
+			"credential_device", cred.DeviceID, "identity", f.identity)
+		return ""
+	}
+	f.log.Info("using persisted credential", "paired_via", cred.PairedVia)
+	return cred.Token
+}
+
+// heartbeat records one liveness tick into agent_state.
 func (f *Frame) heartbeat(ctx context.Context) {
 	if err := setState(ctx, f.db, StateKeyLastHeartbeat, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		f.log.Warn("heartbeat failed", "error", err)
-	}
-}
-
-func (f *Frame) heartbeatComponent(ctx context.Context) error {
-	ticker := time.NewTicker(heartbeatInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-			f.heartbeat(ctx)
-		}
 	}
 }

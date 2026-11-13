@@ -2,6 +2,7 @@ package id
 
 import (
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -27,5 +28,21 @@ func TestNewUUIDUnique(t *testing.T) {
 			t.Fatalf("duplicate uuid %q", u)
 		}
 		seen[u] = true
+	}
+}
+
+func TestIsValidUUID(t *testing.T) {
+	valid, _ := NewUUID()
+	if !IsValidUUID(valid) {
+		t.Fatalf("generated uuid %q rejected", valid)
+	}
+	for _, bad := range []string{
+		"", "not-a-uuid", strings.ToUpper(valid),
+		valid + "x", valid[:35], strings.Replace(valid, "-", "", 1),
+		strings.Replace(valid, "a", "g", 1),
+	} {
+		if IsValidUUID(bad) {
+			t.Fatalf("%q accepted as uuid", bad)
+		}
 	}
 }

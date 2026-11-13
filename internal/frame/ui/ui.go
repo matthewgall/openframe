@@ -178,6 +178,13 @@ type Engine struct {
 	// thermal throttle
 	throttled bool
 
+	// M5 pairing: the code shown on this screen while the frame waits
+	// for admin approval ("" = no active challenge).
+	pairingCode string
+
+	// last present failure (M5 health summary; "" when healthy).
+	lastPresentErr string
+
 	// settings staging
 	staged Settings
 
@@ -343,6 +350,29 @@ func (e *Engine) SetAsleep(on bool) {
 	e.render()
 }
 
+// LastPresentError returns the most recent display present failure
+// summary ("" when the last present succeeded). Used by the M5 health
+// reporter.
+func (e *Engine) LastPresentError() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.lastPresentErr
+}
+
+// SetPairing publishes (or clears, with "") the pairing code shown on
+// the not-yet-paired screen (M5, spec §12). When a code is present the
+// empty state becomes a pairing screen.
+func (e *Engine) SetPairing(code string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.pairingCode == code {
+		return
+	}
+	e.pairingCode = code
+	e.log.Info("pairing code published", "present", code != "")
+	e.render()
+}
+
 // Reload re-reads the active collection (called at startup and after
 // each sync activation). It preserves the user's position as far as
 // possible.
@@ -416,8 +446,49 @@ func (e *Engine) Screen() Screen {
 }
 
 // Config exposes the live config (the settings screen applies staged
-// values into it; the frame persists the change).
+// values into it; the frame persists the change). Cross-goroutine
+// updates must go through ApplyExternalConfig.
 func (e *Engine) Config() *Config { return e.cfg }
+
+// ExternalConfig is the subset of the live config the M5 effective-
+// config applier manages (server config + local settings + config
+// file). Fields the applier does not manage (order, fit, transition
+// duration, callbacks) are left untouched.
+type ExternalConfig struct {
+	Interval    time.Duration
+	Transition  string
+	ShowCaption bool
+	ShowClock   bool
+	Brightness  float64
+	Orientation int
+	SleepOn     int // minutes from midnight
+	SleepOff    int // minutes from midnight
+}
+
+// ApplyExternalConfig updates the live settings from another
+// goroutine (the M5 effective-config applier). It copies values under
+// the lock; the Run loop's Tick re-arms the advance ticker when the
+// effective interval changed.
+func (e *Engine) ApplyExternalConfig(c ExternalConfig) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	intervalChanged := e.cfg.Interval != c.Interval
+	e.cfg.Interval = c.Interval
+	e.cfg.Transition = c.Transition
+	e.cfg.ShowCaption = c.ShowCaption
+	e.cfg.ShowClock = c.ShowClock
+	e.cfg.Brightness = c.Brightness
+	e.cfg.Orientation = c.Orientation
+	e.cfg.SleepOn = c.SleepOn
+	e.cfg.SleepOff = c.SleepOff
+	if intervalChanged {
+		e.lastInterval = 0 // force Tick to re-derive and re-arm
+	}
+	e.log.Info("external config applied",
+		"interval", e.cfg.Interval.String(),
+		"transition", e.cfg.Transition,
+		"brightness", e.cfg.Brightness)
+}
 
 // CurrentPhoto reports the photo the slideshow is showing (nil when
 // none, e.g. an empty collection).
@@ -446,8 +517,12 @@ func (e *Engine) Present() {
 func (e *Engine) present() {
 	// The canvas is exactly the driver size; copy happens in the
 	// driver. A failed present must not kill the UI: the last image
-	// stays on the panel.
+	// stays on the panel. Note: called with e.mu held (all present
+	// call sites run under the lock) — no lock here.
 	if err := e.drv.PresentFrame(context.Background(), e.cv.Image()); err != nil {
+		e.lastPresentErr = err.Error()
 		e.log.Warn("present failed (display keeps last image)", "error", err)
+		return
 	}
+	e.lastPresentErr = ""
 }

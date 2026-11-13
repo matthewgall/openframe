@@ -71,7 +71,13 @@ func (s *Server) handleFrameManifest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "no such device")
 		return
 	}
-	m, newState, err := manifest.Build(ctx, s.db, s.store, deviceID, state)
+	cfgWithVer, err := s.deviceStore.GetFrameConfig(ctx, deviceID)
+	if err != nil {
+		s.log.Error("manifest config load failed", "device", deviceID, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal", "manifest unavailable")
+		return
+	}
+	m, newState, err := manifest.Build(ctx, s.db, s.store, deviceID, state, &cfgWithVer.Config)
 	if err != nil {
 		if errors.Is(err, devices.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "not_found", "no such device")
@@ -87,7 +93,7 @@ func (s *Server) handleFrameManifest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	etag := manifest.ETag(m.Revision)
+	etag := manifest.ETag(m.Revision, m.ConfigRevision)
 	w.Header().Set("ETag", etag)
 	w.Header().Set("Cache-Control", "no-store")
 	if inm := r.Header.Get("If-None-Match"); inm != "" {
@@ -97,6 +103,38 @@ func (s *Server) handleFrameManifest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, m)
+}
+
+// handleFrameHealth: POST /api/v1/frames/{deviceId}/health (device auth).
+// The frame's periodic self-report (spec §13) doubles as its heartbeat:
+// the response carries the remote-sync request sequence, which is how
+// an administrator's "trigger synchronisation" reaches a frame without
+// any inbound connection (spec §6, §12).
+func (s *Server) handleFrameHealth(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	deviceID := deviceFrom(ctx)
+
+	var h devices.HealthReport
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024)).Decode(&h); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "invalid health payload")
+		return
+	}
+	h.Sanitize()
+	if err := s.deviceStore.ReportHealth(ctx, deviceID, &h); err != nil {
+		s.log.Error("health report failed", "device", deviceID, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal", "could not record health")
+		return
+	}
+	seq, err := s.deviceStore.GetSyncRequestSeq(ctx, deviceID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "no such device")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":           "ok",
+		"sync_request_seq": seq,
+		"server_time":      time.Now().UTC().Format(time.RFC3339),
+	})
 }
 
 // etagMatch implements the subset of RFC 9110 If-None-Match semantics

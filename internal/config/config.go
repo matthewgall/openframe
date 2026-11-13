@@ -72,6 +72,10 @@ func (c *Config) PhotoDir() string {
 }
 
 type FrameConfig struct {
+	// Name is the frame's display name, sent with the pairing request
+	// (M5, spec §12) and shown in the admin UI. Defaults to "Frame".
+	Name string `yaml:"name"`
+
 	// ServerURL is the management server base URL, e.g.
 	// https://frame.example.com. Empty means the frame is not yet
 	// configured; the renderer keeps working offline.

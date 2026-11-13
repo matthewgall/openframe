@@ -29,7 +29,9 @@ type runner struct {
 }
 
 func newRunner(log *slog.Logger) *runner {
-	return &runner{log: log, maxComponents: 8}
+	// M5 component set: heartbeat, pairing, ui, touch, sleep, thermal
+	// + 3 sync loops = 9; leave one slot of headroom.
+	return &runner{log: log, maxComponents: 10}
 }
 
 // Run starts all components, waits for ctx cancellation (or the first

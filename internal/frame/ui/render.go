@@ -186,19 +186,43 @@ func (e *Engine) drawControls(p *Photo) {
 
 func (e *Engine) renderEmpty() {
 	// Clear loading/error state (spec §10).
+	info := e.data.Info(context.Background())
+	if !info.Paired {
+		// M5 pairing screen: a code is waiting for admin approval.
+		// Rendered first — it replaces the empty-state text entirely.
+		if e.pairingCode != "" {
+			e.renderPairing()
+			return
+		}
+		e.cv.Font(fontBody).DrawText(e.cv.Image(), e.w/2-280, e.h/2, "This frame is not set up yet.", colDim)
+		e.cv.Font(fontBody).DrawText(e.cv.Image(), e.w/2-280, e.h/2+40, "Pair it from the admin console (Frames → Pending pairing),", colDim)
+		e.cv.Font(fontBody).DrawText(e.cv.Image(), e.w/2-280, e.h/2+80, "or set a credential manually (openframe pair).", colDim)
+		return
+	}
 	f := e.cv.Font(fontTitle)
 	msg := "No photos yet"
 	e.cv.Font(fontTitle).DrawText(e.cv.Image(), (e.w-f.Width(msg))/2, e.h/2-80, msg, colText)
-	info := e.data.Info(context.Background())
-	if !info.Paired {
-		e.cv.Font(fontBody).DrawText(e.cv.Image(), e.w/2-280, e.h/2, "This frame is not set up yet.", colDim)
-		e.cv.Font(fontBody).DrawText(e.cv.Image(), e.w/2-280, e.h/2+40, "Ask an administrator to pair it (openframe pair).", colDim)
-		return
-	}
 	e.cv.Font(fontBody).DrawText(e.cv.Image(), e.w/2-200, e.h/2, "Waiting for the first synchronisation…", colDim)
 	if info.LastSyncError != "" {
 		e.cv.Font(fontBody).DrawText(e.cv.Image(), e.w/2-320, e.h/2+40, "Last sync error: "+truncate(info.LastSyncError, 50), colDim)
 	}
+}
+
+// renderPairing is the M5 not-yet-paired screen with an active
+// challenge (spec §12): a large code the administrator types into the
+// management console to approve this frame.
+func (e *Engine) renderPairing() {
+	codeFont := e.cv.Font(8) // 8×7px per cell: 8-char code ≈ 450px wide
+	title := "Pair this frame"
+	e.cv.Font(fontTitle).DrawText(e.cv.Image(), (e.w-e.cv.Font(fontTitle).Width(title))/2, e.h/2-150, title, colText)
+
+	e.cv.Font(fontBody).DrawText(e.cv.Image(), e.w/2-340, e.h/2-90, "Enter this code in the OpenFrame admin console:", colDim)
+
+	code := e.pairingCode
+	e.cv.Font(8).DrawText(e.cv.Image(), (e.w-codeFont.Width(code))/2, e.h/2-60, code, colText)
+
+	e.cv.Font(fontBody).DrawText(e.cv.Image(), e.w/2-300, e.h/2+70, "The code is single-use and expires in 15 minutes.", colDim)
+	e.cv.Font(fontBody).DrawText(e.cv.Image(), e.w/2-260, e.h/2+110, "Photos start arriving as soon as it is approved.", colDim)
 }
 
 func (e *Engine) renderDetails() {

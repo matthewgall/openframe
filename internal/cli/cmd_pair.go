@@ -5,7 +5,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 
+	"github.com/matthewgall/openframe/internal/frame"
 	"github.com/matthewgall/openframe/internal/version"
 )
 
@@ -34,10 +36,10 @@ func runPair(args []string) int {
 	ctx, cancel := signalContext()
 	defer cancel()
 
-	// Pairing initialises local device identity. The networked pairing
-	// protocol (challenge -> admin approval -> credentials) lands in
-	// milestone 5; until then the frame is in the "pending" state with a
-	// stable local identity.
+	// Pairing initialises local device identity (stable across restarts
+	// and re-pairing). The M5 pairing protocol (challenge -> admin
+	// approval -> one-time credential claim) runs inside `openframe
+	// frame`; this command reports the current state and next steps.
 	dbh, deviceID, err := initFrameState(ctx, cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "failed to initialise frame state:", err)
@@ -54,6 +56,14 @@ func runPair(args []string) int {
 			state = "paired"
 		}
 	}
+	if state == "unpaired" && deviceID != "" {
+		// A credential claimed through the pairing flow is stored in a
+		// 0600 file (not in the config); identity-bound.
+		_, frameDir, _ := cfg.Paths()
+		if cred, cerr := frame.LoadCredential(filepath.Join(frameDir, frame.CredentialFileName)); cerr == nil && cred != nil && cred.DeviceID == deviceID {
+			state = "paired"
+		}
+	}
 
 	next := []string{}
 	switch state {
@@ -63,9 +73,11 @@ func runPair(args []string) int {
 		)
 	case "unpaired":
 		next = append(next,
-			"in the admin web UI (Frames), add a device and issue its credential",
-			"set frame.device_token (or OPENFRAME_FRAME_DEVICE_TOKEN) to the issued token",
-			"restart `openframe frame`; the first manifest sync starts automatically",
+			"start `openframe frame` — the pairing screen shows an 8-character code",
+			"in the admin web UI (Frames → pending requests), enter that code and approve",
+			"the frame claims its credential automatically and starts syncing",
+			"(manual alternative: register this device id in the admin UI, issue a",
+			" credential there, and set frame.device_token / OPENFRAME_FRAME_DEVICE_TOKEN)",
 		)
 	}
 	if state != "" {

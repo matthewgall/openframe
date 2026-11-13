@@ -10,6 +10,8 @@ import (
 
 	"github.com/matthewgall/openframe/internal/server/albums"
 	"github.com/matthewgall/openframe/internal/server/auth"
+	"github.com/matthewgall/openframe/internal/server/devices"
+	"github.com/matthewgall/openframe/internal/server/pairing"
 	"github.com/matthewgall/openframe/internal/server/photos"
 	"github.com/matthewgall/openframe/internal/server/users"
 )
@@ -78,6 +80,23 @@ func domainError(err error) (int, string, string) {
 		return http.StatusUnauthorized, "session_expired", "session expired, sign in again"
 	case errors.Is(err, auth.ErrSessionRevoked):
 		return http.StatusUnauthorized, "session_revoked", "session was revoked, sign in again"
+	case errors.Is(err, pairing.ErrWrongCode):
+		return http.StatusBadRequest, "wrong_code", "the pairing code does not match the frame"
+	case errors.Is(err, pairing.ErrNotPending):
+		return http.StatusConflict, "challenge_consumed", "this pairing request was already handled"
+	case errors.Is(err, pairing.ErrRateLimit):
+		return http.StatusTooManyRequests, "rate_limited", "too many pairing requests; try again later"
+	case errors.Is(err, pairing.ErrExists):
+		return http.StatusConflict, "device_registered", "this frame is already registered"
+	case isConfigValidationError(err):
+		return http.StatusBadRequest, "invalid_config", err.Error()
 	}
 	return http.StatusInternalServerError, "internal", "internal server error"
+}
+
+// isConfigValidationError reports whether err is (or wraps) a
+// *devices.ConfigValidationError.
+func isConfigValidationError(err error) bool {
+	var v *devices.ConfigValidationError
+	return errors.As(err, &v)
 }

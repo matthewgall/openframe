@@ -13,6 +13,7 @@ import (
 	"github.com/matthewgall/openframe/internal/server/audit"
 	"github.com/matthewgall/openframe/internal/server/auth"
 	"github.com/matthewgall/openframe/internal/server/devices"
+	"github.com/matthewgall/openframe/internal/server/pairing"
 	"github.com/matthewgall/openframe/internal/server/photos"
 	"github.com/matthewgall/openframe/internal/server/storage"
 	"github.com/matthewgall/openframe/internal/server/users"
@@ -34,6 +35,7 @@ type Server struct {
 	photoStore   *photos.Store
 	albumStore   *albums.Store
 	deviceStore  *devices.Store
+	pairingStore *pairing.Store
 	store        storage.Storage
 	auditRec     *audit.Recorder
 	loginLimiter *auth.RateLimiter
@@ -50,6 +52,7 @@ type Deps struct {
 	Photos       *photos.Store
 	Albums       *albums.Store
 	Devices      *devices.Store
+	Pairing      *pairing.Store
 	Storage      storage.Storage
 	Audit        *audit.Recorder
 	LoginLimiter *auth.RateLimiter
@@ -67,6 +70,7 @@ func New(d Deps) (*Server, error) {
 		photoStore:   d.Photos,
 		albumStore:   d.Albums,
 		deviceStore:  d.Devices,
+		pairingStore: d.Pairing,
 		store:        d.Storage,
 		auditRec:     d.Audit,
 		loginLimiter: d.LoginLimiter,
@@ -87,6 +91,12 @@ func (s *Server) Router() http.Handler {
 		v1.Post("/auth/login", s.handleLogin)
 		v1.With(s.requireAuth).Get("/auth/csrf", s.handleCSRF)
 
+		// Pairing protocol (M5, spec §12): frame-facing and public by
+		// necessity (an unpaired frame has no credential); creation is
+		// rate-limited per source address in the pairing store.
+		v1.Post("/devices/pair-challenges", s.handlePairChallenge)
+		v1.Post("/devices/pair-status", s.handlePairStatus)
+
 		// Frame synchronisation API (M3, spec §9): authenticated by
 		// device credential (Authorization: Bearer <token>), not by the
 		// admin session. Frames initiate all requests; the server never
@@ -94,6 +104,7 @@ func (s *Server) Router() http.Handler {
 		v1.With(s.requireDevice).Get("/frames/{deviceId}/manifest", s.handleFrameManifest)
 		v1.With(s.requireDevice).Get("/frames/{deviceId}/photos/{resource}", s.handleFramePhoto)
 		v1.With(s.requireDevice).Post("/frames/{deviceId}/changes", s.handleFrameChanges)
+		v1.With(s.requireDevice).Post("/frames/{deviceId}/health", s.handleFrameHealth)
 
 		// Authenticated group: every route below requires a valid
 		// session; mutating requests additionally require the CSRF
@@ -133,10 +144,18 @@ func (s *Server) Router() http.Handler {
 
 			g.With(requireAdmin).Get("/devices", s.handleListDevices)
 			g.With(requireAdmin).Post("/devices", s.handleCreateDevice)
+			g.With(requireAdmin).Get("/devices/{id}", s.handleDeviceDetail)
 			g.With(requireAdmin).Patch("/devices/{id}", s.handleUpdateDevice)
 			g.With(requireAdmin).Post("/devices/{id}/revoke", s.handleRevokeDevice)
 			g.With(requireAdmin).Post("/devices/{id}/credential", s.handleIssueDeviceCredential)
 			g.With(requireAdmin).Delete("/devices/{id}/credential", s.handleRevokeDeviceCredential)
+			g.With(requireAdmin).Get("/devices/{id}/config", s.handleDeviceConfig)
+			g.With(requireAdmin).Put("/devices/{id}/config", s.handleDeviceConfig)
+			g.With(requireAdmin).Post("/devices/{id}/sync", s.handleDeviceSync)
+
+			g.With(requireAdmin).Get("/pairing/pending", s.handleListPairing)
+			g.With(requireAdmin).Post("/pairing/{id}/approve", s.handleApprovePairing)
+			g.With(requireAdmin).Post("/pairing/{id}/reject", s.handleRejectPairing)
 			g.With(requireAdmin).Post("/photos/{id}/priority", s.handleSetPhotoPriority)
 			g.With(requireAdmin).Post("/albums/{id}/priority", s.handleSetAlbumPriority)
 

@@ -126,6 +126,42 @@ Routes marked **admin** require the `admin` role.
 | `POST /api/v1/devices/{id}/credential` | **M3** issue/rotate the device credential. Returns `{token, issued_at}` — the token is shown exactly once (only its SHA-256 is stored). Rotation invalidates the previous token immediately; revoked devices are rejected. |
 | `DELETE /api/v1/devices/{id}/credential` | **M3** revoke the current credential (frame stops syncing). |
 | `POST /api/v1/devices/{id}/revoke` | Revoke the whole device (all credentials). |
+| `GET /api/v1/devices` | **M5** list now also returns per-device `status` (derived, see below) and a `health` block. |
+| `GET /api/v1/devices/{id}` | **M5** device detail: registry row + latest `health` + current `config` document. |
+| `GET /api/v1/devices/{id}/config` | **M5** read the per-frame config document (`{config, version}`). |
+| `PUT /api/v1/devices/{id}/config` | **M5** replace the per-frame config (validated; `400` on bad input, never a partial write). Bumps `config_revision`, which flows to the manifest ETag. |
+| `POST /api/v1/devices/{id}/sync` | **M5** trigger a sync. Bumps the device's `sync_request_seq`; the frame notices on its next ≤30 s heartbeat and checks the manifest immediately (no inbound connection). |
+
+### Pairing (**admin** + frame-facing public)
+
+The pairing protocol (M5) lets a frame register itself without anyone
+typing a token. Three endpoints are **public** (a not-yet-paired frame
+has no credential by definition); the admin endpoints require a session.
+
+| Method & path | Purpose |
+|---|---|
+| `POST /api/v1/devices/pair-challenges` (frame, public) | Body `{device_id, device_name}`. Creates a pending challenge, returns `{challenge_id, code, expires_at, ttl_seconds}`. The 8-char code (31-symbol unambiguous alphabet, ~40 bits) is shown on the frame. Rate-limited per source IP (max 3 pending, 6 per 30 min). `409` if the device id is already registered. |
+| `POST /api/v1/devices/pair-status` (frame, public) | Body `{challenge_id}`. Returns `{status: pending|approved|rejected|expired}`. When `approved` and not yet claimed, also returns `{device_id, credential}` — the credential is a **one-time claim**: the server nulls it after the first poll, so a replay gets nothing. |
+| `GET /api/v1/pairing/pending` (**admin**) | Pending challenges (without the code): offered name, source IP, created/expires. |
+| `POST /api/v1/pairing/{id}/approve` (**admin**) | Body `{code}`. Constant-time verify; on success atomically registers the device under its own identity and returns `{device, credential}` (shown once). `400` on a wrong code. |
+| `POST /api/v1/pairing/{id}/reject` (**admin**) | Reject a pending challenge. |
+
+### Health (device status derivation)
+
+The frame posts a sanitized report via `POST /api/v1/frames/{deviceId}/health`
+(device-authenticated). The server keeps only the **latest** report per
+device and derives the `status` shown in the admin UI:
+
+| Status | Meaning |
+|---|---|
+| `online` | heartbeat within the freshness window |
+| `recently_seen` | seen, but outside the online window |
+| `offline` | never seen or stale beyond the window |
+| `sync_error` | latest report says the last sync failed (overlay on online/recently_seen) |
+| `updating` / `update_failed` / `rollback` | M6 updater states (reserved) |
+
+The same response carries `sync_request_seq`, which is how the admin's
+`POST /devices/{id}/sync` reaches the frame (see above).
 
 ### Audit & stats
 
@@ -199,12 +235,21 @@ out to a frame.
 | `POST /api/v1/photos/{id}/priority` | `{"priority": bool}` — mark a photograph for priority delivery. |
 | `POST /api/v1/albums/{id}/priority` | `{"priority": bool}` — mark a collection; every photo in it is priority-delivered. |
 
-### Remaining planned endpoints (M5–M6)
+## Milestone 5 — multi-frame management
+
+Everything above (pairing, health, per-frame config, remote sync) plus
+one manifest addition: the manifest gains a `config` block and a
+`config_revision`. The ETag is `"<content_revision>:<config_revision>"`,
+so a **config-only** change re-fetches the manifest (new ETag) without
+any photo-download churn, and a config-only 304 is impossible while the
+config is fresh. The `config` block carries the validated per-frame
+document (name, slideshow interval/transition, sleep window,
+brightness, orientation, captions, clock, sync interval). Precedence on
+the frame is **local settings > server config > config file**.
+
+### Remaining planned endpoints (M6)
 
 ```
-/api/v1/frames/{id}/health          health report ingest (M5)
-/api/v1/frames/{id}/sync            remote sync trigger (M5)
-/api/v1/pairing/...                 challenge + approval pairing UX (M5)
 /api/v1/releases/...                release metadata (M6)
 ```
 

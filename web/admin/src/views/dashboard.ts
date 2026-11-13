@@ -1,4 +1,4 @@
-import { getHealth, getStats, photoFileURL, type Stats } from '../api';
+import { getHealth, getStats, listDevices, photoFileURL, type DeviceStatus, type Stats } from '../api';
 import { clear, formatBytes, formatDateTime, h, kvRow } from '../components';
 
 export function renderDashboard(root: HTMLElement): void {
@@ -28,6 +28,12 @@ export function renderDashboard(root: HTMLElement): void {
   recentWrap.append(recentGrid);
   root.append(recentWrap);
 
+  const framesCard = h('div', { class: 'card', style: 'margin-top:1rem' });
+  framesCard.append(h('h2', {}, 'Frames'));
+  const framesKv = h('dl', { class: 'kv' });
+  framesCard.append(framesKv);
+  root.append(framesCard);
+
   const healthCard = h('div', { class: 'card', style: 'margin-top:1rem' });
   healthCard.append(h('h2', {}, 'Server'));
   const healthKv = h('dl', { class: 'kv' });
@@ -36,13 +42,27 @@ export function renderDashboard(root: HTMLElement): void {
 
   const refresh = async (): Promise<void> => {
     try {
-      const [stats, health] = await Promise.all([getStats(), getHealth()]);
+      const [stats, health, dev] = await Promise.all([getStats(), getHealth(), listDevices().catch(() => null)]);
       const s = stats as Stats;
       cardEls[0].textContent = String(s.photos.total);
       cardEls[1].textContent = formatBytes(s.photos.storage_bytes);
       cardEls[2].textContent = `${s.albums.total} (${s.albums.shared} shared)`;
       cardEls[3].textContent = String(s.users.active);
       cardEls[4].textContent = String(s.devices.total);
+
+      clear(framesKv);
+      if (dev) {
+        const counts = new Map<DeviceStatus, number>();
+        for (const d of dev.devices) counts.set(d.status, (counts.get(d.status) ?? 0) + 1);
+        if (dev.devices.length === 0) {
+          kvRow(framesKv, 'Registered', '0 — pair your first frame (Frames → Pending pairing)');
+        } else {
+          const order: DeviceStatus[] = ['online', 'sync_error', 'updating', 'update_failed', 'rollback', 'recently_seen', 'offline'];
+          const parts = order.filter((k) => counts.get(k)).map((k) => `${counts.get(k)} ${k.replace('_', ' ')}`);
+          kvRow(framesKv, 'Status', parts.join(' · '));
+          kvRow(framesKv, 'Total', String(dev.devices.length));
+        }
+      }
 
       clear(recentGrid);
       const recent = (s.photos.recent ?? []) as unknown as Array<{

@@ -34,6 +34,7 @@ import (
 	"math/rand"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matthewgall/openframe/internal/config"
@@ -47,12 +48,25 @@ type manifest struct {
 	Protocol       string          `json:"protocol"`
 	Revision       int64           `json:"revision"`
 	ConfigRevision int64           `json:"config_revision"`
-	Config         manifestConfig  `json:"config"`
+	Config         Config          `json:"config"`
 	Albums         []manifestAlbum `json:"albums"`
 }
 
-type manifestConfig struct {
-	Name string `json:"name"`
+// Config is the per-frame configuration pushed by the server in the
+// manifest (M5, spec §6). Zero/empty values are unset: the frame falls
+// back to its local settings, then to its config file.
+type Config struct {
+	Name                 string `json:"name"`
+	SlideshowIntervalSec int    `json:"slideshow_interval_sec,omitempty"`
+	Transition           string `json:"transition,omitempty"` // none|crossfade|slide
+	TransitionDurationMS int    `json:"transition_duration_ms,omitempty"`
+	SyncIntervalSec      int    `json:"sync_interval_sec,omitempty"`
+	SleepOn              string `json:"sleep_on,omitempty"`   // "HH:MM" or ""
+	SleepOff             string `json:"sleep_off,omitempty"`  // "HH:MM" or ""
+	Brightness           *int   `json:"brightness,omitempty"` // 0..100
+	Orientation          string `json:"orientation,omitempty"`
+	ShowClock            *bool  `json:"show_clock,omitempty"`
+	ShowCaptions         *bool  `json:"show_captions,omitempty"`
 }
 
 type manifestAlbum struct {
@@ -110,16 +124,18 @@ const (
 	keyLastETag            = "last_manifest_etag"
 	keyActiveRevision      = "active_revision"
 	keyDeviceName          = "device_name"
+	keyConfigRevision      = "config_revision"
 )
 
 // Engine is the frame synchronisation engine.
 type Engine struct {
-	log      *slog.Logger
-	db       *sql.DB
-	cache    *cache.Store
-	client   *Client
-	deviceID string
-	syncCfg  config.SyncConfig
+	log       *slog.Logger
+	db        *sql.DB
+	cache     *cache.Store
+	client    *Client
+	serverURL string
+	deviceID  string
+	syncCfg   config.SyncConfig
 	// math/rand.Rand is not safe for concurrent use; the download
 	// workers share the engine, so every draw is mutex-guarded.
 	rngMu sync.Mutex
@@ -131,6 +147,19 @@ type Engine struct {
 	// non-blocking.
 	activateMu sync.Mutex
 	onActivate func(revision int64)
+
+	// onConfig is called (synchronously, on the goroutine that ran
+	// Check) when the server's per-frame configuration advances.
+	configMu sync.Mutex
+	onConfig func(Config)
+
+	// checkMu serialises Check: the manifest loop and the M5
+	// remote-sync trigger (heartbeat) can both request a check.
+	checkMu sync.Mutex
+
+	// manifestIntervalOverride is the server-configured manifest
+	// poll interval in seconds (0 = use the config file value).
+	manifestIntervalOverride atomic.Int64
 }
 
 // New wires an engine. An empty serverURL leaves the engine in the
@@ -146,7 +175,8 @@ func New(deviceID, serverURL, token string, log *slog.Logger, dbh *sql.DB, c *ca
 	log = logging.NewComponent(log, "sync")
 	e := &Engine{
 		log: log, db: dbh, cache: c, deviceID: deviceID,
-		syncCfg: cfg.Sync, rng: rand.New(rand.NewSource(time.Now().UnixNano())),
+		serverURL: serverURL, syncCfg: cfg.Sync,
+		rng: rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 	if serverURL == "" {
 		return e, nil
@@ -161,6 +191,112 @@ func New(deviceID, serverURL, token string, log *slog.Logger, dbh *sql.DB, c *ca
 
 // Paired reports whether the engine has a server and a credential.
 func (e *Engine) Paired() bool { return e.client != nil && e.client.token != "" }
+
+// SetCredential installs (or replaces) the device credential, e.g. after
+// the M5 pairing flow completes. The frame identity (device ID) is
+// unchanged: pairing registers the frame under its own identity.
+func (e *Engine) SetCredential(token string) error {
+	if e.serverURL == "" {
+		return errors.New("sync: no server configured")
+	}
+	if token == "" {
+		return errors.New("sync: empty credential")
+	}
+	cl, err := NewClient(e.serverURL, token)
+	if err != nil {
+		return err
+	}
+	e.client = cl
+	return nil
+}
+
+// ServerURL returns the configured server base URL ("" when unset).
+func (e *Engine) ServerURL() string { return e.serverURL }
+
+// OnConfig registers a callback fired when the server's per-frame
+// configuration advances (M5). It runs on the goroutine that performed
+// the manifest check; the callback must be fast and non-blocking.
+func (e *Engine) OnConfig(fn func(Config)) {
+	e.configMu.Lock()
+	e.onConfig = fn
+	e.configMu.Unlock()
+}
+
+func (e *Engine) fireConfig(cfg Config) {
+	e.configMu.Lock()
+	fn := e.onConfig
+	e.configMu.Unlock()
+	if fn != nil {
+		fn(cfg)
+	}
+}
+
+// SetManifestInterval overrides the manifest poll interval (seconds),
+// 0 restores the config-file value. Called by the M5 config applier.
+func (e *Engine) SetManifestInterval(seconds int) {
+	if seconds > 0 {
+		e.manifestIntervalOverride.Store(int64(seconds))
+	} else {
+		e.manifestIntervalOverride.Store(0)
+	}
+}
+
+// DeviceID returns the frame identity the engine authenticates as.
+func (e *Engine) DeviceID() string { return e.deviceID }
+
+// ReportHealth posts a health report (M5, spec §13) and returns the
+// server's remote-sync request sequence. Delegates to the client so
+// the credential is applied exactly once.
+func (e *Engine) ReportHealth(ctx context.Context, payload []byte) (int64, error) {
+	if err := e.client.requirePairing(); err != nil {
+		return 0, err
+	}
+	return e.client.ReportHealth(ctx, e.deviceID, payload)
+}
+
+// LastAttempt returns the time of the most recent manifest check.
+func (e *Engine) LastAttempt(ctx context.Context) (time.Time, bool) {
+	s := e.getState(ctx, keyLastAttempt)
+	if s == "" {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
+}
+
+// LastSync returns the time of the last successful manifest activation
+// and whether one has happened.
+func (e *Engine) LastSync(ctx context.Context) (time.Time, bool) {
+	s := e.getState(ctx, keyLastSuccess)
+	if s == "" {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
+}
+
+// LastError returns the last sync error summary ("" when healthy).
+func (e *Engine) LastError(ctx context.Context) string { return e.getState(ctx, keyLastError) }
+
+// ActiveRevision returns the active collection revision.
+func (e *Engine) ActiveRevision(ctx context.Context) int64 {
+	v, _ := parseI64(e.getState(ctx, keyActiveRevision))
+	return v
+}
+
+// PendingDownloads returns the number of queued downloads.
+func (e *Engine) PendingDownloads(ctx context.Context) int {
+	var n int
+	_ = e.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM download_queue").Scan(&n)
+	return n
+}
 
 // OnActivate registers a callback fired after each successful
 // activation with the new collection revision. It must be called
@@ -229,22 +365,16 @@ func (e *Engine) getState(ctx context.Context, key string) string {
 // 1. Manifest checker.
 
 // ManifestLoop checks for a new manifest on the configured interval
-// (with jitter) and, on a new revision, stages the collection.
+// (with jitter) and, on a new revision, stages the collection. The
+// loop stays up while unpaired (polling at the short unpaired tick) so
+// a credential installed at runtime by the M5 pairing flow is picked
+// up without restarting the frame.
 func (e *Engine) ManifestLoop(ctx context.Context) error {
-	if !e.Paired() {
-		e.idle(ctx)
-		return nil
-	}
-	interval := e.syncCfg.ManifestInterval
-	if interval <= 0 {
-		interval = 60 * time.Minute
-	}
 	for {
-		e.Check(ctx)
-		delay := interval + e.jitter(interval, 0.2)
-		if delay < 0 {
-			delay = interval
+		if e.Paired() {
+			e.Check(ctx)
 		}
+		delay := e.manifestDelay()
 		select {
 		case <-ctx.Done():
 			return nil
@@ -253,10 +383,38 @@ func (e *Engine) ManifestLoop(ctx context.Context) error {
 	}
 }
 
+// manifestDelay returns the next poll delay: the server-configured or
+// config-file interval with jitter when paired, a short unpaired tick
+// otherwise (so a fresh pairing is noticed quickly).
+func (e *Engine) manifestDelay() time.Duration {
+	if !e.Paired() {
+		return 30 * time.Second
+	}
+	if v := e.manifestIntervalOverride.Load(); v > 0 {
+		// Server-configured interval (M5), in seconds.
+		base := time.Duration(v) * time.Second
+		return base + e.jitter(base, 0.2)
+	}
+	base := e.syncCfg.ManifestInterval
+	if base <= 0 {
+		base = 60 * time.Minute
+	}
+	delay := base + e.jitter(base, 0.2)
+	if delay < 0 {
+		delay = base
+	}
+	return delay
+}
+
 // Check performs one conditional manifest fetch and, on a new
 // revision, stages the collection. It is the unit the manifest loop,
 // the M5 remote-sync trigger and tests call.
 func (e *Engine) Check(ctx context.Context) {
+	// checkMu serialises the manifest loop with the M5 remote-sync
+	// trigger (both can call Check concurrently).
+	e.checkMu.Lock()
+	defer e.checkMu.Unlock()
+
 	start := time.Now()
 	e.setState(ctx, keyLastAttempt, start.UTC().Format(time.RFC3339Nano))
 
@@ -273,14 +431,18 @@ func (e *Engine) Check(ctx context.Context) {
 		return
 	}
 
-	m, err := e.stageManifest(ctx, res.Body)
+	m, staged, err := e.stageManifest(ctx, res.Body)
 	if err != nil {
 		e.failAttempt(ctx, err)
 		return
 	}
 	e.setState(ctx, keyLastETag, res.ETag)
 	e.resetFailures(ctx)
-	if m != nil {
+	if m == nil {
+		return
+	}
+	e.applyConfig(ctx, m)
+	if staged {
 		e.log.Info("manifest staged",
 			"revision", m.Revision,
 			"albums", len(m.Albums),
@@ -289,22 +451,38 @@ func (e *Engine) Check(ctx context.Context) {
 	}
 }
 
+// applyConfig fires the OnConfig callback when the server's per-frame
+// configuration has advanced. A config-only change does not bump the
+// content revision, but the manifest ETag covers config_revision too,
+// so the frame re-fetches and sees it.
+func (e *Engine) applyConfig(ctx context.Context, m *manifest) {
+	last, _ := parseI64(e.getState(ctx, keyConfigRevision))
+	if m.ConfigRevision <= last {
+		return
+	}
+	e.setState(ctx, keyConfigRevision, fmt.Sprint(m.ConfigRevision))
+	e.log.Info("frame config updated",
+		"config_revision", m.ConfigRevision, "name", m.Config.Name)
+	e.fireConfig(m.Config)
+}
+
 // stageManifest persists a new manifest as a STAGING collection and
 // populates the download queue. The active tables (photos, albums)
 // are left untouched until activation, so the renderer keeps showing
 // the previous collection until every mandatory file is verified
 // (spec §8). Single transaction: no half-staged collection.
-// Returns nil (not an error) when the revision is not newer.
-func (e *Engine) stageManifest(ctx context.Context, body []byte) (*manifest, error) {
+// Returns the parsed manifest and whether a new staging was created
+// (false for a config-only update at the same content revision).
+func (e *Engine) stageManifest(ctx context.Context, body []byte) (*manifest, bool, error) {
 	var m manifest
 	if err := json.Unmarshal(body, &m); err != nil {
-		return nil, fmt.Errorf("parse manifest: %w", err)
+		return nil, false, fmt.Errorf("parse manifest: %w", err)
 	}
 	if m.Protocol == "" {
-		return nil, errors.New("manifest: missing protocol")
+		return nil, false, errors.New("manifest: missing protocol")
 	}
 	if m.Revision <= 0 {
-		return nil, fmt.Errorf("manifest: invalid revision %d", m.Revision)
+		return nil, false, fmt.Errorf("manifest: invalid revision %d", m.Revision)
 	}
 	// Monotonicity guard: a revision at or below the active one is a
 	// stale replay (or a server rollback); ignore it so we never
@@ -313,12 +491,14 @@ func (e *Engine) stageManifest(ctx context.Context, body []byte) (*manifest, err
 	if m.Revision <= activeRev {
 		e.log.Info("manifest revision not newer; ignoring",
 			"got", m.Revision, "active", activeRev)
-		return nil, nil
+		// The parsed manifest still carries the server config
+		// (e.g. a config-only update): return it, unstaged.
+		return &m, false, nil
 	}
 
 	tx, err := e.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer tx.Rollback()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -326,12 +506,12 @@ func (e *Engine) stageManifest(ctx context.Context, body []byte) (*manifest, err
 	// Replace any previous staging (its queue + staging rows cascade).
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM collections WHERE state = 'staging'`); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO collections (revision, photo_count, total_bytes, state, created_at)
 		 VALUES (?, 0, 0, 'staging', ?)`, m.Revision, now); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	totalBytes := int64(0)
@@ -345,7 +525,7 @@ func (e *Engine) stageManifest(ctx context.Context, body []byte) (*manifest, err
 			`INSERT INTO staging_albums (collection_revision, id, name, cover_hash)
 			 VALUES (?, ?, ?, ?)`,
 			m.Revision, a.ID, a.Name, nullIfEmpty(a.CoverHash)); err != nil {
-			return nil, fmt.Errorf("stage album %s: %w", a.ID, err)
+			return nil, false, fmt.Errorf("stage album %s: %w", a.ID, err)
 		}
 	}
 
@@ -384,7 +564,7 @@ func (e *Engine) stageManifest(ctx context.Context, body []byte) (*manifest, err
 				int64Or0(p.Display), int64Or0(p.Thumb),
 				nullIfEmpty(disSHA), nullIfEmpty(thSHA), nullIfEmpty(disRes), nullIfEmpty(thRes),
 				boolInt(p.Priority), boolInt(p.Favourite)); err != nil {
-				return nil, fmt.Errorf("stage photo %s: %w", p.Hash, err)
+				return nil, false, fmt.Errorf("stage photo %s: %w", p.Hash, err)
 			}
 			// Server-authoritative favourite (no pending local op).
 			e.applyServerFavourite(tx, ctx, p)
@@ -401,11 +581,11 @@ func (e *Engine) stageManifest(ctx context.Context, body []byte) (*manifest, err
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE collections SET photo_count = ?, total_bytes = ? WHERE revision = ? AND state = 'staging'`,
 		photoCount, totalBytes, m.Revision); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	// Per-frame configuration (M3: device name for the M4 settings
 	// screen; M5 adds settings). Stored so the display can use it
@@ -415,7 +595,7 @@ func (e *Engine) stageManifest(ctx context.Context, body []byte) (*manifest, err
 	}
 	e.log.Debug("collection staged",
 		"revision", m.Revision, "photos", photoCount, "queued", queued, "bytes", totalBytes)
-	return &m, nil
+	return &m, true, nil
 }
 
 // cacheCached reports whether a manifest file is already committed in

@@ -193,7 +193,7 @@ func (f *Frame) applyUIState(st ui.Settings) error {
 		f.log.Warn("rotation apply failed", "error", err)
 	}
 	// Rebuild the sleep schedule.
-	if sched, err := sleep.FromConfig(minutesToHM(st.SleepOn), minutesToHM(st.SleepOff), f.cfg.Frame.Sleep.TZ); err == nil {
+	if sched, err := sleep.FromConfig(minutesToHM(st.SleepOn), minutesToHM(st.SleepOff), f.effectiveConfig().Frame.Sleep.TZ); err == nil {
 		f.ui.setSchedule(sched)
 	}
 	if len(errs) > 0 {
@@ -242,10 +242,11 @@ func (f *Frame) uiComponent(ctx context.Context) error {
 // touchComponent reads the touchscreen evdev node and feeds the
 // gesture recognizer into the UI input channel.
 func (f *Frame) touchComponent(ctx context.Context) error {
-	if !f.cfg.Frame.Touch.Enabled {
+	eff := f.effectiveConfig()
+	if !eff.Frame.Touch.Enabled {
 		return nil
 	}
-	devPath := f.cfg.Frame.Touch.Device
+	devPath := eff.Frame.Touch.Device
 	if devPath == "" {
 		p, err := touch.FindTouchscreen("", "")
 		if err != nil {
@@ -278,7 +279,8 @@ func (f *Frame) touchComponent(ctx context.Context) error {
 // asleep turns the display off (backlight or black frame) while the
 // frame keeps running and syncing (spec §11).
 func (f *Frame) sleepComponent(ctx context.Context) error {
-	if f.cfg.Frame.Sleep.On == "" && f.cfg.Frame.Sleep.Off == "" {
+	eff := f.effectiveConfig()
+	if eff.Frame.Sleep.On == "" && eff.Frame.Sleep.Off == "" {
 		return nil
 	}
 	f.log.Info("sleep schedule active", "schedule", f.ui.schedule().Description())
@@ -324,7 +326,7 @@ func (f *Frame) thermalComponent(ctx context.Context) error {
 			f.ui.throttled = throttled
 			f.ui.eng.SetThrottled(throttled)
 			if throttled {
-				f.log.Warn("thermal throttle: slideshow interval doubled", "threshold_c", f.cfg.Frame.Thermal.ThresholdC)
+				f.log.Warn("thermal throttle: slideshow interval doubled", "threshold_c", f.effectiveConfig().Frame.Thermal.ThresholdC)
 			} else {
 				f.log.Info("thermal throttle released")
 			}
@@ -460,7 +462,7 @@ func (d *frameData) Info(ctx context.Context) ui.Info {
 	f := d.f
 	info := ui.Info{
 		DeviceName:      f.deviceName(ctx),
-		ServerURL:       f.cfg.Frame.ServerURL,
+		ServerURL:       f.effectiveConfig().Frame.ServerURL,
 		ServerReachable: f.serverReachable(ctx),
 		LastSync:        f.lastSyncTime(ctx),
 		Version:         version.Version,
@@ -488,10 +490,11 @@ func (f *Frame) stateValue(ctx context.Context, table, key string) (string, erro
 }
 
 func (f *Frame) serverReachable(ctx context.Context) bool {
-	if f.cfg.Frame.ServerURL == "" {
+	serverURL := f.effectiveConfig().Frame.ServerURL
+	if serverURL == "" {
 		return false
 	}
-	return platform.Reachable(ctx, f.cfg.Frame.ServerURL+"/healthz", 2*time.Second) == nil
+	return platform.Reachable(ctx, serverURL+"/healthz", 2*time.Second) == nil
 }
 
 func (f *Frame) lastSyncTime(ctx context.Context) *time.Time {

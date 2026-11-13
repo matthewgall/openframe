@@ -165,15 +165,14 @@ func (s *Store) IssueCredential(ctx context.Context, deviceID string) (string, e
 		return "", errors.New("devices: cannot issue credential to a revoked device")
 	}
 
-	var raw [43]byte
-	if _, err := rand.Read(raw[:]); err != nil {
+	rawToken, err := NewToken()
+	if err != nil {
 		return "", fmt.Errorf("issue credential: %w", err)
 	}
-	rawToken := tokenPrefix + base64.RawURLEncoding.EncodeToString(raw[:])
 	sum := sha256.Sum256([]byte(rawToken))
 	tokenHash := hex.EncodeToString(sum[:])
 
-	_, err := s.dbh.ExecContext(ctx,
+	_, err = s.dbh.ExecContext(ctx,
 		`INSERT INTO device_credentials (device_id, token_hash, issued_at)
 		 VALUES (?, ?, ?)
 		 ON CONFLICT(device_id) DO UPDATE SET
@@ -247,6 +246,17 @@ func (s *Store) VerifyCredential(ctx context.Context, deviceID, rawToken string)
 		return errors.New("devices: bad credential")
 	}
 	return nil
+}
+
+// NewToken generates a fresh device credential (random, base64url, no
+// padding). Exported so the pairing flow (M5) can issue a credential
+// inside its own transaction.
+func NewToken() (string, error) {
+	var raw [43]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return tokenPrefix + base64.RawURLEncoding.EncodeToString(raw[:]), nil
 }
 
 // tokenPrefix marks OpenFrame device tokens in logs-free contexts and

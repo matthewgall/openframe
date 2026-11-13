@@ -52,27 +52,36 @@ internal/server
 ├── users/           user records, roles, last-active-admin lockout
 ├── photos/          upload pipeline (validate → orient → hash → derivatives), photo store
 ├── albums/          albums, membership, covers, device assignment
-├── devices/         device registry + credential lifecycle (issue/rotate/revoke, hash-only at rest)
-├── manifest/        frame manifest builder (content-derived revision, config revision)
+├── devices/         M3 credential lifecycle + M5 health store, sync-request queue,
+│                    per-frame config (versioned, validated)
+├── pairing/         M5 pairing store: short codes (hash-only at rest), rate limits,
+│                    approval → device + one-time credential claim
+├── manifest/        frame manifest builder (content revision + M5 config revision)
 ├── storage/         Storage interface + content-addressed local FS backend (Range reads for resume)
 └── audit/           append-only audit recorder (JSON detail, no secrets)
 ```
 
-## Frame internals (M4)
+## Frame internals (M4–M5)
 
 ```
 internal/frame
 ├── frame.go            lifecycle: identity, DB, cache, sync engine, UI stack, components
 ├── ui_wiring.go        M4 display stack: UI engine, touch, sleep, thermal, ui.Data
 ├── settings.go         local settings overrides (frame.db frame_settings)
+├── credential.go       M5: 0600 credential file (atomic temp+rename, not in frame.db)
+├── pairing_wiring.go   M5: unpaired loop — challenge → code on screen → poll → claim
+├── effective.go        M5: effective config (config file < server config < local)
+├── health.go           M5: 30 s health report, bounded error ring, sync-request seq
+├── pairing/            M5 pairing client (challenge request, status poll, claim)
 ├── cache/              content-addressed derivative cache (.part → verify → rename; quota + GC)
 ├── sync/               sync engine: manifest checker, download queue/worker, atomic
-│                       activation, offline favourites queue, backoff + jitter, policies
+│                       activation, offline favourites queue, backoff + jitter, policies,
+│                       M5: runtime SetCredential + OnConfig hooks
 ├── display/            driver boundary + headless visual simulator
 │   └── drm/            pure-Go DRM/KMS renderer (atomic commits, dumb buffers)
 ├── canvas/             fullscreen NRGBA compositing, fit modes, transitions, bitmap font
-├── ui/                 touchscreen state machine: slideshow, details, gallery, album,
-│                       search, settings, sleep; gesture dispatch; high-contrast rendering
+├── ui/                 touchscreen state machine: pairing, slideshow, details, gallery,
+│                       album, search, settings, sleep; gesture dispatch; high-contrast
 ├── touch/              evdev 24-byte event reader, sample frames, gesture recognizer
 ├── sleep/              daily on/off schedule (minutes-from-midnight, IANA tz)
 └── thermal/            sysfs thermal-zone monitor (fail-open)
@@ -108,6 +117,56 @@ safe) and presents the new set.
 - Local settings (brightness, interval, transition, orientation,
   sleep window, captions, clock) persist in frame.db and survive
   restarts; they override the config file for that frame.
+
+### Pairing and multi-frame (M5)
+
+**Pairing protocol** (no inbound connections, no typed tokens):
+
+```
+frame                                   server                     admin
+ │ POST /devices/pair-challenges {id, name} │                        │
+ │────────────────────────────────────────►│ create challenge        │
+ │ ◄─────────────────────────────────────── │ 8-char code (SHA-256   │
+ │ code shown on the pairing screen         │ hash stored; rate      │
+ │                                          │ limited per source IP) │
+ │                                          │◄── pending list ───────│
+ │                                          │ POST approve {code} ───│
+ │ POST /devices/pair-status {challenge_id} │ code verified (constant│
+ │────────────────────────────────────────►│ time) → device + token │
+ │ ◄─────────────────────────────────────── │ credential returned    │
+ │ credential claimed once (server nulls    │ exactly once; frame    │
+ │ it after first claim) → saved to 0600   │ saves it to disk and   │
+ │ file → sync engine SetCredential → sync │ starts syncing         │
+```
+
+The server never initiates connections; the frame pulls everything
+(pairing status, manifest, downloads). Challenge codes are short-lived,
+single-use and brute-force-resistant (rate-limited creations +
+constant-time comparison; see the threat model).
+
+**Health reporting**: every 30 s the frame posts a sanitized snapshot
+(version, uptime, last sync, manifest revision, disk, memory, CPU
+temperature, display driver/status, bounded recent errors). The server
+keeps only the latest report per device and derives the status shown
+in the admin UI: `online` (recent heartbeat) → `recently_seen` →
+`offline`, with `sync_error`, `updating`, `update_failed`, `rollback`
+overlays from the report. The same response carries the
+`sync_request_seq`: when an admin **triggers a sync**, the frame sees
+the sequence increase on its next heartbeat and runs an immediate
+check — the only "remote control" path, and it rides the frame's own
+outbound request.
+
+**Per-frame configuration**: the admin UI stores a versioned JSON
+document per device (validated server-side; bad input is a 400, never
+a partial write). It travels in the manifest's `config` block with its
+own `config_revision`; the ETag includes both revisions, so a
+config-only change re-fetches the manifest without photo churn. The
+frame layers it as: **local settings > server config > config file** —
+a frame-local adjustment always wins, and clearing it falls back to
+the server value. The effective config is applied live (UI interval,
+transition, brightness, orientation, sleep schedule, sync interval)
+and the pointer swap is mutex-serialized against the UI/render
+threads.
 
 The API layer is the only HTTP-facing code; domain packages are plain
 stores over the shared `*sql.DB` and are individually testable against

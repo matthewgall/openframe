@@ -30,6 +30,7 @@ import (
 	"github.com/matthewgall/openframe/internal/server/audit"
 	"github.com/matthewgall/openframe/internal/server/auth"
 	"github.com/matthewgall/openframe/internal/server/devices"
+	"github.com/matthewgall/openframe/internal/server/pairing"
 	"github.com/matthewgall/openframe/internal/server/photos"
 	"github.com/matthewgall/openframe/internal/server/storage"
 	"github.com/matthewgall/openframe/internal/server/users"
@@ -72,6 +73,7 @@ func New(cfg *config.Config, log *slog.Logger, dbh *sql.DB) (*Server, error) {
 		Photos:       photos.NewStore(dbh),
 		Albums:       albums.NewStore(dbh),
 		Devices:      devices.NewStore(dbh),
+		Pairing:      pairing.NewStore(dbh),
 		Storage:      fs,
 		Audit:        audit.NewRecorder(dbh, log),
 		LoginLimiter: auth.NewRateLimiter(time.Minute, 1024),

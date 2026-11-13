@@ -70,6 +70,87 @@ export interface DeviceCredential {
   issued_at: string;
 }
 
+// --- M5: health, status, per-frame config, pairing ---------------------------
+
+export interface DeviceHealth {
+  version: string;
+  uptime_seconds: number;
+  last_sync_at: string;
+  last_sync_ok: boolean;
+  manifest_revision: number;
+  pending_downloads: number;
+  storage_total: number;
+  storage_used: number;
+  cache_bytes: number;
+  mem_total_mb: number;
+  mem_used_mb: number;
+  cpu_temp_c: number | null;
+  display_driver: string;
+  display_status: string;
+  error_count_24h: number;
+  recent_errors: string[];
+  update_state: string;
+}
+
+export type DeviceStatus =
+  | 'online'
+  | 'recently_seen'
+  | 'offline'
+  | 'sync_error'
+  | 'updating'
+  | 'update_failed'
+  | 'rollback';
+
+export interface DeviceWithHealth extends Device {
+  last_heartbeat_at?: string;
+  sync_request_seq: number;
+  health?: DeviceHealth | null;
+  status: DeviceStatus;
+}
+
+export interface FrameConfig {
+  slideshow_interval_sec: number;
+  transition: string; // none | crossfade | slide
+  transition_duration_ms: number;
+  sync_interval_sec: number;
+  sleep_on: string; // "HH:MM" or ""
+  sleep_off: string; // "HH:MM" or ""
+  brightness: number | null; // 0..100
+  orientation: string; // normal | rotate90 | rotate180 | rotate270
+  show_clock: boolean | null;
+  show_captions: boolean | null;
+}
+
+export interface FrameConfigDoc {
+  config: FrameConfig;
+  version: number;
+  updated_at: string;
+}
+
+export interface DeviceDetail {
+  device: Device;
+  health: DeviceHealth | null;
+  last_heartbeat_at?: string;
+  status: DeviceStatus;
+  sync_request_seq: number;
+  config: FrameConfigDoc;
+}
+
+export interface PairingChallenge {
+  id: string;
+  device_id: string;
+  device_name: string;
+  source_ip: string;
+  status: string;
+  created_at: string;
+  expires_at: string;
+}
+
+export interface PairingApproval {
+  device?: Device;
+  credential: string;
+}
+
 export interface AuditEntry {
   id: number;
   actor_user_id?: string;
@@ -346,8 +427,38 @@ export function albumUnassignDevice(id: string, deviceId: string): Promise<unkno
 
 // --- Devices -----------------------------------------------------------------
 
-export function listDevices(): Promise<{ devices: Device[] }> {
+export function listDevices(): Promise<{ devices: DeviceWithHealth[] }> {
   return request('GET', '/api/v1/devices');
+}
+
+export function getDevice(id: string): Promise<DeviceDetail> {
+  return request('GET', `/api/v1/devices/${id}`);
+}
+
+export function getDeviceConfig(id: string): Promise<{ config: FrameConfigDoc }> {
+  return request('GET', `/api/v1/devices/${id}/config`);
+}
+
+export function putDeviceConfig(id: string, cfg: FrameConfig): Promise<{ config: FrameConfigDoc }> {
+  return request('PUT', `/api/v1/devices/${id}/config`, cfg);
+}
+
+export function requestDeviceSync(id: string): Promise<{ status: string; sync_request_seq: number }> {
+  return request('POST', `/api/v1/devices/${id}/sync`, {});
+}
+
+// --- Pairing (M5, spec §12) ---------------------------------------------------
+
+export function listPairingPending(): Promise<{ challenges: PairingChallenge[] }> {
+  return request('GET', '/api/v1/pairing/pending');
+}
+
+export function approvePairing(id: string, code: string): Promise<PairingApproval> {
+  return request('POST', `/api/v1/pairing/${id}/approve`, { code });
+}
+
+export function rejectPairing(id: string): Promise<{ status: string }> {
+  return request('POST', `/api/v1/pairing/${id}/reject`, {});
 }
 
 export function createDevice(name: string): Promise<{ device: Device }> {

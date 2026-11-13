@@ -161,12 +161,39 @@ cross-build stays toolchain-free (ADR-0006).
   behaviour on Linux AMD64 (spec §20).
 - Race detector is part of CI; local `make test-race` is the equivalent.
 
+## Multi-frame development (M5)
+
+Pairing is fully local-loopback testable: start the server and a
+headless frame (no token, no pre-registered device), and the frame's
+pairing screen (visible in `latest.png`) shows the code. Approve it
+from the admin UI's **Frames → pending requests**, and the frame picks
+up the credential within ~10 s and starts syncing — no manual token
+handling. `openframe status` then reports `paired`/`paired_synced`.
+
+The per-frame config form and the **Trigger sync** button live in the
+same Frames page (manage modal). A config change is observable on the
+frame within one manifest interval (default 30 s); `Trigger sync`
+cuts that to the next heartbeat (≤30 s).
+
+M5 tests:
+
+- `internal/server/api/m5_test.go` — the full pairing protocol over
+  HTTP (challenge → approve → one-time claim → manifest with the
+  claimed credential), rate limiting, health + status derivation +
+  sync-request sequence, and config distribution including the
+  config-only ETag/304 behaviour.
+- `internal/frame/m5_test.go` — frame-side pairing against a real
+  server (challenge → approve → claim → persist → sync), credential
+  roundtrip + identity binding, effective-config precedence
+  (config file < server < local, local-clear fallback), and the
+  health payload shape.
+
+The UI's pairing screen and the frames dashboard are covered by the
+existing headless E2E (`TestE2ETouchscreenDisplay`) and the
+`ui.Engine` unit tests respectively.
+
 ## What is deliberately not here yet
 
-- Multi-frame management polish (M5): in-UI pairing challenge/approval
-  (today: admin creates the device with the frame's identity + issues
-  a credential), remote sync requests, per-frame configuration from
-  the admin UI, health reporting.
 - Auto-updater (M6) — `internal/updater/` is an empty boundary package.
 - Production hardening (M7): backups/exports, long-run soak,
   security review pass.

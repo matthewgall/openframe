@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -84,6 +85,39 @@ func (c *Client) requirePairing() error {
 
 func (c *Client) manifestPath(deviceID string) string {
 	return c.base + protocol.APIPath + "/frames/" + deviceID + "/manifest"
+}
+
+// ReportHealth posts the frame's health report (M5, spec §13) and
+// returns the server's remote-sync request sequence. A new sequence
+// means an administrator triggered a synchronisation (spec §6).
+func (c *Client) ReportHealth(ctx context.Context, deviceID string, payload []byte) (int64, error) {
+	if err := c.requirePairing(); err != nil {
+		return 0, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		c.base+protocol.APIPath+"/frames/"+deviceID+"/health",
+		bytes.NewReader(payload))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	c.authorize(req)
+
+	resp, err := c.httpc.Do(req)
+	if err != nil {
+		return 0, &ErrServerDown{Cause: err}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return 0, c.httpError(resp)
+	}
+	var out struct {
+		SyncRequestSeq int64 `json:"sync_request_seq"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return 0, fmt.Errorf("decode health response: %w", err)
+	}
+	return out.SyncRequestSeq, nil
 }
 
 // ManifestResult is the outcome of a conditional manifest fetch.

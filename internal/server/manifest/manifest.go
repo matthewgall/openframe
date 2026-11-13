@@ -65,10 +65,23 @@ type Album struct {
 }
 
 // Config is the per-frame configuration carried in the manifest.
-// M3 ships the device name (shown on the frame's settings screen in
-// M4); M5 adds per-frame settings and bumps config_revision.
+// M3 ships the device name; M5 adds the administrator-managed
+// settings (spec §6). Zero/empty values are unset: the frame falls
+// back to its local settings, then to its config file. Changes bump
+// config_revision without churning photo downloads.
 type Config struct {
 	Name string `json:"name"`
+
+	SlideshowIntervalSec int    `json:"slideshow_interval_sec,omitempty"`
+	Transition           string `json:"transition,omitempty"` // none|crossfade|slide
+	TransitionDurationMS int    `json:"transition_duration_ms,omitempty"`
+	SyncIntervalSec      int    `json:"sync_interval_sec,omitempty"`
+	SleepOn              string `json:"sleep_on,omitempty"`   // "HH:MM" or ""
+	SleepOff             string `json:"sleep_off,omitempty"`  // "HH:MM" or ""
+	Brightness           *int   `json:"brightness,omitempty"` // 0..100
+	Orientation          string `json:"orientation,omitempty"`
+	ShowClock            *bool  `json:"show_clock,omitempty"`
+	ShowCaptions         *bool  `json:"show_captions,omitempty"`
 }
 
 // Manifest is the wire document.
@@ -80,8 +93,13 @@ type Manifest struct {
 	Albums         []Album `json:"albums"`
 }
 
-// ETag renders the manifest's HTTP ETag value for a revision.
-func ETag(revision int64) string { return fmt.Sprintf("\"%d\"", revision) }
+// ETag renders the manifest's HTTP ETag value. It covers BOTH the
+// content revision and the config revision (M5): a config-only change
+// must invalidate the frame's cached manifest so the new settings are
+// delivered, without churning any photo downloads.
+func ETag(revision, configRevision int64) string {
+	return fmt.Sprintf("\"%d:%d\"", revision, configRevision)
+}
 
 // content is the deterministic subset of the manifest that the
 // revision is derived from.
@@ -93,12 +111,15 @@ type content struct {
 // Build computes the manifest for a device plus the new fingerprints
 // (revisions) to persist. The input state is the device's stored
 // fingerprints; revisions advance only when content changes.
+// frameCfg is the administrator-managed per-frame configuration (M5);
+// pass a zero FrameConfig when none is set.
 func Build(
 	ctx context.Context,
 	dbh *sql.DB,
 	store storage.Storage,
 	deviceID string,
 	state devices.ManifestState,
+	frameCfg *devices.FrameConfig,
 ) (*Manifest, devices.ManifestState, error) {
 	var devName string
 	if err := dbh.QueryRowContext(ctx,
@@ -135,9 +156,22 @@ func Build(
 		newState.ManifestRevision = state.ManifestRevision + 1
 		newState.ManifestHash = newHash
 	}
-	// Config revision is independent of content (a rename must not
-	// churn photo downloads).
-	cfg, err := json.Marshal(Config{Name: devName})
+	// Config revision is independent of content (a rename or a config
+	// change must not churn photo downloads).
+	mc := Config{Name: devName}
+	if frameCfg != nil {
+		mc.SlideshowIntervalSec = frameCfg.SlideshowIntervalSec
+		mc.Transition = frameCfg.Transition
+		mc.TransitionDurationMS = frameCfg.TransitionDurationMS
+		mc.SyncIntervalSec = frameCfg.SyncIntervalSec
+		mc.SleepOn = frameCfg.SleepOn
+		mc.SleepOff = frameCfg.SleepOff
+		mc.Brightness = frameCfg.Brightness
+		mc.Orientation = frameCfg.Orientation
+		mc.ShowClock = frameCfg.ShowClock
+		mc.ShowCaptions = frameCfg.ShowCaptions
+	}
+	cfg, err := json.Marshal(mc)
 	if err != nil {
 		return nil, state, err
 	}
@@ -152,7 +186,7 @@ func Build(
 		Protocol:       protocol.ManifestProtocol,
 		Revision:       newState.ManifestRevision,
 		ConfigRevision: newState.ConfigRevision,
-		Config:         Config{Name: devName},
+		Config:         mc,
 		Albums:         albums,
 	}
 	return m, newState, nil

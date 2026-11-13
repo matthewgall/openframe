@@ -25,6 +25,7 @@ type frameState struct {
 	LastSyncError    string     `json:"last_sync_error,omitempty"`
 	PairingStatus    string     `json:"pairing_status"` // unconfigured | unpaired | paired | paired_synced
 	ServerConfigured bool       `json:"server_configured"`
+	ServerConfig     string     `json:"server_config,omitempty"` // M5: summary of last applied server config
 	LastSyncSuccess  *time.Time `json:"last_sync_success,omitempty"`
 	ActiveRevision   int64      `json:"active_revision,omitempty"`
 	PendingChanges   int        `json:"pending_changes,omitempty"`
@@ -75,11 +76,21 @@ func readFrameState(ctx context.Context, cfg *config.Config) frameState {
 	st.PairingStatus = pairingStatus(cfg)
 	if st.DeviceID == "" {
 		st.PairingStatus = "unconfigured"
+	} else if st.PairingStatus == "unpaired" {
+		// M5: a credential claimed through the pairing flow is stored
+		// in a file, not in the config — count that as paired.
+		if cred, err := frame.LoadCredential(filepath.Join(frameDir, frame.CredentialFileName)); err == nil &&
+			cred != nil && cred.DeviceID == st.DeviceID {
+			st.PairingStatus = "paired"
+		}
 	}
 	if v, err := syncValue(ctx, dbh, "last_sync_error"); err == nil {
 		st.LastSyncError = v
 	} else if v, err := stValue(ctx, dbh, "last_sync_error"); err == nil {
 		st.LastSyncError = v
+	}
+	if v, err := stValue(ctx, dbh, "server_config"); err == nil {
+		st.ServerConfig = v
 	}
 	if v, err := syncValue(ctx, dbh, "last_success"); err == nil {
 		if t, perr := time.Parse(time.RFC3339, v); perr == nil {

@@ -447,6 +447,41 @@ select.input { width: auto; min-width: 180px; }
 .banner.success { border-left-color: var(--accent); }
 .banner.error { border-left-color: var(--danger); color: var(--text); }
 
+/* --- M5: pairing + frame management ---------------------------------- */
+.pairing-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--border);
+}
+.pairing-row:first-of-type { border-top: none; }
+.pairing-info strong { display: block; }
+.pairing-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.pairing-code { max-width: 160px; letter-spacing: 0.15em; text-transform: uppercase; }
+
+.manage-section { margin-bottom: 1.5rem; }
+.manage-section h3 { margin: 0 0 0.6rem; font-size: 1.05rem; }
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0 1.25rem;
+}
+.check-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+}
+.check-label input { width: 18px; height: 18px; accent-color: var(--accent); }
+
 @media (max-width: 720px) {
   .photo-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
   .modal-actions { flex-direction: column; }

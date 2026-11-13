@@ -27,7 +27,7 @@ Status legend: ✅ implemented & tested · 🟨 partial (scope noted) ·
 | ID | Threat | Mitigation | Milestone | Status |
 |---|---|---|---|---|
 | T-01 | Compromised frame (malicious agent) | Least-privilege frame user; no root; per-device credential revocation/rotation from the admin UI; the frame credential is scoped to that device and cannot read other devices' resources or the admin API; signed releases only | M3 (revocation) / M6 (signing) | 🟨 — per-device bearer credential issued/rotated/revoked in M3 (API + admin UI); frame user isolation in M7, signing in M6 |
-| T-02 | Stolen SD card | Photos are cached copies (originals stay on server); the frame cache is content-addressed and only useful with a valid credential + server pairing record; the frame.db holds no credentials or PII (only the device id, which is not a secret); document card wiping; future: LUKS on the data partition | M3 (verified layout) / M7 (documented) | 🟨 — cache + frame.db layout verified M3 (no secrets at rest); wiping runbook in M7 |
+| T-02 | Stolen SD card | Photos are cached copies (originals stay on server); the frame cache is content-addressed and only useful with a valid credential + server pairing record; the credential (M5) lives in a dedicated 0600 file outside frame.db and is per-device scoped, hash-verified and instantly revocable/rotatable from the admin UI; frame.db holds no other secrets or PII (only the device id, which is not a secret); document card wiping; future: LUKS on the data partition | M3 (verified layout) / M5 (credential file) / M7 (documented) | 🟨 — cache + frame.db layout verified M3; M5 credential file is 0600, atomic (temp+rename), identity-bound (a file from another frame is refused), and revocable server-side; wiping runbook in M7 |
 | T-03 | Stolen device credentials | Credentials are revocable, rotatable, per-device, and never stored in the clear — the server keeps only SHA-256 hashes and compares in constant time; rotation invalidates the previous token immediately; revocation stops sync; all device downloads/changes are audit-logged; the token is shown exactly once at issue | M3 | ✅ — `device_credentials` hash-only storage, constant-time verify, one-time display, rotate/revoke endpoints + admin UI, per-device scoping enforced in the frame API, audit entries for manifest/download/changes |
 | T-04 | Malicious photograph upload | Magic-byte + decode validation (not just MIME); decoded dimension caps; bounded decode memory; EXIF sanitisation on derivatives; no execution of uploaded content anywhere | M2 | ✅ — JPEG/PNG/lossy-WebP accepted; HEIC & lossless/extended WebP rejected with 415 (ADR-0009); orientation applied; derivatives are re-encoded, EXIF-free JPEG |
 | T-05 | Compromised family account | Argon2id password hashing; session expiry + revocation; login rate limiting; admin-only recovery; audit log of admin actions; passkey-ready design | M2 | ✅ except passkeys — Argon2id (OWASP params), hashed sessions with TTL + revoke + revoke-all, per-IP & per-account login throttling, last-active-admin lockout, admin password reset, full audit trail |
@@ -41,6 +41,7 @@ Status legend: ✅ implemented & tested · 🟨 partial (scope noted) ·
 | T-13 | Unsafe image decoders | Decode with dimension bounds; reject malformed files; derivatives generated server-side with resource caps | M2 | ✅ — decode bounded by `max_decode_dimension`; malformed payloads rejected (tested); derivatives rendered from validated pixel data |
 | T-14 | Secrets in logs | Structured logging convention: no credentials, tokens, signed URLs or PII in log attributes (reviewed at each milestone) | M1+ | ✅ with one documented exception — the first-run bootstrap logs the initial admin's one-time temporary password exactly once (Info level, `first_run` marker); it is a recovery credential for a not-yet-existing account and is not a long-lived secret |
 | T-15 | Dependency supply chain | Pinned go.sum + package-lock.json; govulncheck in CI; dependabot; minimal dependency set (see ADR-0004) | M1 | ✅ — M2 adds x/crypto, x/image, goexif only (all pure-Go); `chai2010/webp` evaluated and rejected for cgo coupling (ADR-0009) |
+| T-16 | Pairing-protocol attacks (code brute-force, challenge flooding, eavesdrop) | Codes are 8 chars from an unambiguous 31-symbol alphabet (~40 bits), short-lived (15 min TTL), single-use; the server stores only SHA-256 hashes, compares in constant time, and rate-limits challenge creation per source IP (max 3 pending + 6 per 30 min); approval additionally requires a valid admin session, so an attacker who can reach the API cannot approve a device they cannot see; the public endpoints reveal nothing about existing devices (opaque 404/401); the one-time credential claim is null-ed server-side after the first poll, so a replayed status request gets nothing | M5 | ✅ — challenge store with hash-only codes, constant-time verify, per-IP creation caps, one-time claim (all tested); LAN assumption: on an untrusted network the pairing exchange is as exposed as any HTTP without TLS — the documented deployment is a home LAN or a reverse-proxied HTTPS endpoint (T-09) |
 
 ## Notes (M4)
 
@@ -57,6 +58,35 @@ Status legend: ✅ implemented & tested · 🟨 partial (scope noted) ·
   machine) will prevent it from attaching. Frames run headless (no
   display server) by deployment; `doctor` reports the probe outcome
   when a card is held by another client.
+
+## Notes (M5)
+
+- **Physical access now includes the pairing surface.** Pairing is
+  designed for the operator standing in front of the frame: the code
+  is displayed on the device and must be entered by a logged-in
+  admin. A passer-by can read the code, but approval requires an
+  admin session *and* the code — and a rejected/expired challenge
+  cannot be approved later. A passer-by can also create challenges
+  (public endpoint), but each is rate-limited, transient and useless
+  without an admin approving it; the admin UI shows who is asking
+  (offered name + source IP) before approval.
+- **The credential file is the frame's crown jewel.** It is 0600,
+  written atomically, and bound to the frame identity (a copied file
+  is refused). It grants only that device's resources. The standing
+  mitigation is unchanged: revocation/rotation from the admin UI is
+  one click and takes effect on the frame's next request.
+- **Server config is trusted input to a kiosk.** The per-frame config
+  document is validated server-side (enum/numeric checks, time-format
+  checks) before it can reach a frame, and the frame re-applies it
+  under a mutex so a mid-render update cannot tear UI state. The
+  admin is the trusted principal here (they already can rename,
+  unassign and revoke the frame); the validation exists so a bad
+  document can never wedge a frame into a broken display state.
+- **Health reports are frame-supplied.** The server displays them but
+  never acts on them (no auto-remediation); a lying frame can only
+  mislabel its own status. Status derivation (`online`/`offline`)
+  is anchored on server-side heartbeat time, not the frame's
+  self-reported uptime.
 
 ## Standing rules
 
