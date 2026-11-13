@@ -39,7 +39,10 @@ func TestIsValidUUID(t *testing.T) {
 	for _, bad := range []string{
 		"", "not-a-uuid", strings.ToUpper(valid),
 		valid + "x", valid[:35], strings.Replace(valid, "-", "", 1),
-		strings.Replace(valid, "a", "g", 1),
+		// Fixed literal: the invalid case must not depend on the
+		// generated UUID happening to contain a particular character
+		// (a replace-"a"-with-"g" is a no-op ~13% of the time).
+		"df949842-c139-42f7-g9d3-487490f5f5eb",
 	} {
 		if IsValidUUID(bad) {
 			t.Fatalf("%q accepted as uuid", bad)
