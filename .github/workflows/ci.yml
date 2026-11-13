@@ -17,10 +17,18 @@ env:
   GO_VERSION: "1.26.11"
 
 jobs:
-  # --- Tests (the gate) ----------------------------------------------------
-  # One runner: fmt/vet/test share the same module cache. Every build
-  # job below waits on this — artifacts are only produced from code
-  # that passed the full suite.
+  # --- Pipeline shape ------------------------------------------------------
+  #   test ──┬──> web (admin SPA) ──> build (binaries)
+  #   vuln ──┘
+  # test and vuln run in parallel; the SPA build waits for BOTH, and
+  # the binary cross-compile waits for the SPA build. So binaries are
+  # only produced (and only embed the committed dist/) after the full
+  # suite AND the dependency audit passed. (The Go build embeds the
+  # committed web/admin/dist bytes — the web job is what proves those
+  # bytes match the SPA sources before they get embedded.)
+
+  # --- Tests (gate 1 of 2) -------------------------------------------------
+  # One runner: fmt/vet/test share the same module cache.
   test:
     name: tests (gofmt + vet + race)
     runs-on: ubuntu-latest
@@ -40,8 +48,8 @@ jobs:
         run: go test ./... -race -count=1
 
   # --- Cross-builds --------------------------------------------------------
-  # Depends on the test gate: binaries are only built (and uploaded)
-  # from code that passed the suite above.
+  # Depends on web, which itself requires test + vuln: binaries are
+  # only built (and uploaded) once everything upstream is green.
   #
   # Every supported target in ONE job: the codebase is pure Go
   # (CGO_ENABLED=0, no cgo), so all of these are plain cross-compiles.
@@ -50,7 +58,7 @@ jobs:
   # ARM is offered as v6 (32-bit Pi Zero/1) and v7 (32-bit Pi 3/4).
   build:
     name: cross-compile (all targets)
-    needs: test
+    needs: web
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -97,10 +105,10 @@ jobs:
           name: openframe-binaries
           path: dist
 
-  # --- Web UI build -------------------------------------------------------
+  # --- Web UI build (gate 2: runs after test AND vuln, before build) ---
   web:
     name: admin SPA build
-    needs: test
+    needs: [test, vuln]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -133,10 +141,9 @@ jobs:
           name: openframe-admin-dist
           path: web/admin/dist
 
-  # --- Dependency audit ----------------------------------------------------
+  # --- Dependency audit (gate 2 of 2, parallel with test) -----------------
   vuln:
     name: govulncheck
-    needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
