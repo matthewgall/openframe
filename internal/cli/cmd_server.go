@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/matthewgall/openframe/internal/db"
 	"github.com/matthewgall/openframe/internal/id"
@@ -32,6 +33,17 @@ func runServer(args []string) int {
 	log = logging.NewComponent(log, "server")
 	log.Info("starting openframe server",
 		"version", version.Version, "commit", version.Commit)
+
+	// T-09: TLS is a deployment requirement (reverse proxy). The
+	// server itself listens plain on its bind address; when the
+	// public base URL is unset or not HTTPS, say so loudly at every
+	// start so a plain-HTTP deployment cannot be accidental.
+	switch {
+	case cfg.Server.PublicBaseURL == "":
+		log.Warn("server.public_base_url is not configured — set it to the HTTPS URL frames will use, behind a TLS-terminating reverse proxy (threat model T-09)")
+	case !strings.HasPrefix(cfg.Server.PublicBaseURL, "https://"):
+		log.Warn("public base URL is not HTTPS — serve the server through a TLS-terminating reverse proxy before exposing it (threat model T-09)")
+	}
 
 	ctx, stop := signalContext()
 	defer stop()

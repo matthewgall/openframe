@@ -66,6 +66,26 @@ func Open(ctx context.Context, path string, readOnly bool) (*sql.DB, error) {
 	return dbh, nil
 }
 
+// OpenSnapshotRead opens an existing database file read-only WITHOUT
+// OpenFrame's per-connection pragmas. VACUUM INTO snapshots are
+// created in delete journal mode; forcing journal_mode(WAL) on a
+// read-only handle would require write access. The first writable
+// open (e.g. after a restore) converts the file to WAL via the
+// normal DSN pragmas.
+func OpenSnapshotRead(ctx context.Context, path string) (*sql.DB, error) {
+	dsn := "file:" + path + "?mode=ro&_pragma=busy_timeout(10000)"
+	dbh, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite %s: %w", path, err)
+	}
+	dbh.SetMaxOpenConns(1)
+	if err := dbh.PingContext(ctx); err != nil {
+		dbh.Close()
+		return nil, fmt.Errorf("connect sqlite %s: %w", path, err)
+	}
+	return dbh, nil
+}
+
 // Ping runs a fast liveness probe bounded by ctx.
 func Ping(ctx context.Context, dbh *sql.DB) error {
 	return dbh.PingContext(ctx)

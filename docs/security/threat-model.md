@@ -2,8 +2,8 @@
 
 Milestone 1 records the threat landscape and the mitigation strategy
 per threat; each control is implemented and tested in the milestone
-noted here. Status is refreshed at each milestone checkpoint; the
-document is completed in M7 (security review).
+noted here. Status is refreshed at each milestone checkpoint. The
+M7 security review (see `review.md`) completed this document.
 
 Status legend: ✅ implemented & tested · 🟨 partial (scope noted) ·
 ⬜ planned for the listed milestone.
@@ -26,16 +26,16 @@ Status legend: ✅ implemented & tested · 🟨 partial (scope noted) ·
 
 | ID | Threat | Mitigation | Milestone | Status |
 |---|---|---|---|---|
-| T-01 | Compromised frame (malicious agent) | Least-privilege frame user; no root; per-device credential revocation/rotation from the admin UI; the frame credential is scoped to that device and cannot read other devices' resources or the admin API; signed releases only | M3 (revocation) / M6 (signing) | 🟨 — per-device bearer credential issued/rotated/revoked in M3 (API + admin UI); frame user isolation in M7, signing in M6 |
-| T-02 | Stolen SD card | Photos are cached copies (originals stay on server); the frame cache is content-addressed and only useful with a valid credential + server pairing record; the credential (M5) lives in a dedicated 0600 file outside frame.db and is per-device scoped, hash-verified and instantly revocable/rotatable from the admin UI; frame.db holds no other secrets or PII (only the device id, which is not a secret); document card wiping; future: LUKS on the data partition | M3 (verified layout) / M5 (credential file) / M7 (documented) | 🟨 — cache + frame.db layout verified M3; M5 credential file is 0600, atomic (temp+rename), identity-bound (a file from another frame is refused), and revocable server-side; wiping runbook in M7 |
+| T-01 | Compromised frame (malicious agent) | Least-privilege frame user; no root; per-device credential revocation/rotation from the admin UI; the frame credential is scoped to that device and cannot read other devices' resources or the admin API; signed releases only | M3 (revocation) / M6 (signing) / M7 (isolation checks) | ✅ — per-device bearer credential issued/rotated/revoked (M3, constant-time, hash-only storage); signed releases only (M6); M7: `doctor` fails on credential mode drift or group/other-accessible data dirs and warns when the frame could run as root; the updater is the only root component and executes only verified binaries |
+| T-02 | Stolen SD card | Photos are cached copies (originals stay on server); the frame cache is content-addressed and only useful with a valid credential + server pairing record; the credential (M5) lives in a dedicated 0600 file outside frame.db and is per-device scoped, hash-verified and instantly revocable/rotatable from the admin UI; frame.db holds no other secrets or PII (only the device id, which is not a secret); document card wiping; future: LUKS on the data partition | M3 (verified layout) / M5 (credential file) / M7 (documented) | ✅ — cache + frame.db layout verified M3; M5 credential file is 0600, atomic (temp+rename), identity-bound (a file from another frame is refused), and revocable server-side; M7: `doctor` security check guards the on-disk posture, the SD-card wipe procedure is in `docs/deployment/production.md`, and optional LUKS is documented as the hardware-grade option |
 | T-03 | Stolen device credentials | Credentials are revocable, rotatable, per-device, and never stored in the clear — the server keeps only SHA-256 hashes and compares in constant time; rotation invalidates the previous token immediately; revocation stops sync; all device downloads/changes are audit-logged; the token is shown exactly once at issue | M3 | ✅ — `device_credentials` hash-only storage, constant-time verify, one-time display, rotate/revoke endpoints + admin UI, per-device scoping enforced in the frame API, audit entries for manifest/download/changes |
 | T-04 | Malicious photograph upload | Magic-byte + decode validation (not just MIME); decoded dimension caps; bounded decode memory; EXIF sanitisation on derivatives; no execution of uploaded content anywhere | M2 | ✅ — JPEG/PNG/lossy-WebP accepted; HEIC & lossless/extended WebP rejected with 415 (ADR-0009); orientation applied; derivatives are re-encoded, EXIF-free JPEG |
 | T-05 | Compromised family account | Argon2id password hashing; session expiry + revocation; login rate limiting; admin-only recovery; audit log of admin actions; passkey-ready design | M2 | ✅ except passkeys — Argon2id (OWASP params), hashed sessions with TTL + revoke + revoke-all, per-IP & per-account login throttling, last-active-admin lockout, admin password reset, full audit trail |
-| T-06 | Compromised management server | Assume breach: no secrets beyond what the server legitimately holds; backups enable rebuild; frames keep operating offline; credentials revocable after rebuild | M7 (runbook) | ⬜ |
+| T-06 | Compromised management server | Assume breach: no secrets beyond what the server legitimately holds; backups enable rebuild; frames keep operating offline; credentials revocable after rebuild | M7 (runbook) | ✅ — `openframe backup/restore` (online-consistent VACUUM INTO snapshots, per-file sha256 manifest, integrity-checked restore preflight, recovery-tested M7); the breach-and-rebuild runbook (`docs/deployment/production.md`) covers: stop & isolate, snapshot forensic state, rebuild from verified backup, rotate ALL admin passwords and every device credential (old hashes are worthless after a fresh DB, but rotation is the belt-and-braces step), frames re-pair or keep operating offline through the incident |
 | T-07 | Compromised release hosting | Signatures are verified against pinned device-side keys; tampered metadata/artifacts rejected; metadata expiry; anti-rollback | M6 | ✅ — verifier rejects every named failure (`ErrBadSignature`, `ErrUnknownSigner`, `ErrExpired`, `ErrNotBefore`, `ErrPlatformMismatch`, `ErrProtocolIncompat`, `ErrSchemaIncompat`, `ErrDowngrade`, `ErrArtifactHash`, `ErrArtifactSize`), each with a tamper test; trusted keys are device-pinned (`/opt/openframe/trust/trusted-keys.json`) and never served by the release server; the server stores and re-serves the exact signed bytes it was given; the unsigned `serving` block can only change WHO is rollout-eligible, never WHAT (version/digest/size are signed); unavailable update server never affects slideshow or sync |
 | T-08 | Update-signing key compromise | Key rotation scheme with pinned key set and explicit rotation releases; short-lived signing in CI via OIDC, never in PRs | M6 | ✅ — rotation is a signed event: a release may add a new trusted key only when signed by a key the device already trusts (`TrustedKeys.AddTrusted`, invalid new keys rejected with `ErrInvalidNewKey`); old keys stay trusted until explicitly removed, so rotation cannot be used to erase trust; the signing key never reaches the frame or the release server — only its public half is pinned; CI signing is tag-triggered with OIDC permissions (no PR-triggered minting) |
-| T-09 | Network interception | HTTPS everywhere; certificate verification (no InsecureSkipVerify); no secrets in URLs | M2+ | 🟨 — session cookies `HttpOnly`+`SameSite=Lax` (`Secure` when the public URL is HTTPS), CSRF synchronizer token on all mutations, login rate limiting; TLS itself is a deployment requirement (reverse proxy) and enforced in the M7 runbook |
-| T-10 | Database corruption | WAL + integrity_check in doctor; transactional migrations with checksums; backup/restore procedures | M1 (checks) / M7 (restore tests) | ✅ M1 scope |
+| T-09 | Network interception | HTTPS everywhere; certificate verification (no InsecureSkipVerify); no secrets in URLs | M2+ / M7 (signals) | ✅ — session cookies `HttpOnly`+`SameSite=Lax` (`Secure` when the public URL is HTTPS), CSRF synchronizer token on all mutations, login rate limiting, zero `InsecureSkipVerify` in the tree; M7: the server logs a warning at every start when the public base URL is unset or not HTTPS, `doctor` warns on a non-https `frame.server_url`, and the runbook ships the TLS-terminating reverse-proxy configuration |
+| T-10 | Database corruption | WAL + integrity_check in doctor; transactional migrations with checksums; backup/restore procedures | M1 (checks) / M7 (backup + restore tests) | ✅ — M1: WAL, `PRAGMA integrity_check` in `doctor`, checksummed transactional migrations; M7: `openframe backup` (consistent online snapshots) and `openframe restore` (verify-then-restore, existing data preserved as `.pre-restore-*`), with full destroy-and-recover tests for both server and frame data dirs and tamper detection (`TestVerifyDetectsTampering`) |
 | T-11 | Path traversal | All user-controlled paths go through validated joins; no user input reaches exec or filesystem roots; static asset serving from a closed embedded FS | M1 (SPA) / M2 (uploads) | ✅ — SPA from embedded FS; storage keys are strict (hex hash / hash.variant) and path-validated; upload filenames are display metadata only, never filesystem keys |
 | T-12 | Denial of service | Upload size limits, rate limiting, bounded goroutines/queues on frames, bounded image decode, bounded HTTP timeouts | M2/M3 | ✅ — per-file/per-request upload caps, decode dimension caps, login rate limiting, bounded HTTP timeouts; frame-side: bounded download concurrency + per-file size caps (manifest `size_bytes` enforced before commit), bounded queue table, per-attempt timeouts, backoff+jitter on failure, cache quota + free-space guard that stops downloads safely on a full disk; M4 UI: single bounded canvas (one 1280×800 NRGBA framebuffer), bounded gesture channel (32, drops when the UI is stalled), bounded snapshot ring, per-photo decode cache bounded by the canvas, touch reader reassembles fixed-size 24-byte evdev records (malformed reads close the stream) |
 | T-13 | Unsafe image decoders | Decode with dimension bounds; reject malformed files; derivatives generated server-side with resource caps | M2 | ✅ — decode bounded by `max_decode_dimension`; malformed payloads rejected (tested); derivatives rendered from validated pixel data |
@@ -123,6 +123,33 @@ Status legend: ✅ implemented & tested · 🟨 partial (scope noted) ·
   from it (updating/failed/rollback override the online/offline
   derivation). A frame that cannot read the file reports `none` and
   keeps working — the updater is a separate concern by design.
+
+## Notes (M7)
+
+- **Backups are now part of the security story, not just operations.**
+  A backup directory is authenticated the same way a release is:
+  every file hashed at backup time, re-hashed and integrity-checked
+  on verify and again as the restore preflight. Restore never
+  destroys live data (`.pre-restore-*` preservation) and leaves the
+  backup intact for re-use. The destroy-and-recover paths for both
+  components are tested, which is what lets T-06's "rebuild from
+  backup" claim stand.
+- **The frame user-isolation checks live in `doctor`, not the
+  frame.** The frame cannot judge its own privilege; `doctor`
+  (run by the operator, and wireable into cron/monitoring) is the
+  enforcement point: credential 0600 and private data dirs are hard
+  fails, root invocation is a context warning, non-HTTPS server URL
+  is a warning with the T-09 pointer.
+- **TLS stays a deployment-layer control by design** (the server
+  cannot see its own reverse proxy), but M7 made accidental plain
+  HTTP loud: startup warning in `openframe server`, doctor warning
+  on the frame side, and the runbook's reverse-proxy config as the
+  reference. The standing rule "no secrets in URLs" is unchanged.
+- **Review sweep results** (full write-up in `review.md`): zero
+  `InsecureSkipVerify`, constant-time compares on all three token
+  classes, every admin route behind session+CSRF+role, every upload
+  bounded, no secrets in any log attribute (bootstrap exception
+  stands as documented).
 
 ## Standing rules
 

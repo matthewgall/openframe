@@ -119,6 +119,49 @@ func TestPairInitialisesIdentity(t *testing.T) {
 	}
 }
 
+func TestBackupRestoreRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENFRAME_DATA_DIR", dir)
+
+	// pair creates the frame DB.
+	if _, code := runCmd(t, "pair"); code != ExitOK {
+		t.Fatalf("pair code = %d", code)
+	}
+	out := filepath.Join(t.TempDir(), "frame-backup")
+	outArg := "--out=" + out
+
+	// Backup + verify.
+	if outStr, code := runCmd(t, "backup", "frame", outArg); code != ExitOK {
+		t.Fatalf("backup frame: %d, %q", code, outStr)
+	}
+	if outStr, code := runCmd(t, "backup", "verify", "--dir="+out); code != ExitOK {
+		t.Fatalf("verify: %d, %q", code, outStr)
+	}
+
+	// Destroy the live db and restore from the backup.
+	if err := os.Remove(filepath.Join(dir, "frame", "frame.db")); err != nil {
+		t.Fatal(err)
+	}
+	if outStr, code := runCmd(t, "restore", "frame", "--from="+out, "--yes"); code != ExitOK {
+		t.Fatalf("restore: %d, %q", code, outStr)
+	}
+	dbPath := filepath.Join(dir, "frame", "frame.db")
+	if _, err := os.Stat(dbPath); err != nil {
+		t.Fatalf("restored db missing: %v", err)
+	}
+
+	// Restore must be idempotent-safe: a second restore preserves the
+	// first result as .pre-restore-* (no data loss, no crash).
+	if outStr, code := runCmd(t, "restore", "frame", "--from="+out, "--yes"); code != ExitOK {
+		t.Fatalf("second restore: %d, %q", code, outStr)
+	}
+
+	// Kind mismatch is rejected.
+	if _, code := runCmd(t, "restore", "server", "--from="+out, "--yes"); code == ExitOK {
+		t.Fatal("frame backup accepted by restore server")
+	}
+}
+
 func TestUpdateSetChannel(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("OPENFRAME_DATA_DIR", dir)

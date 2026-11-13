@@ -81,6 +81,17 @@ test-race: ## Tests with the race detector
 vuln: ## Dependency vulnerability scan
 	$(GO) run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
+.PHONY: bench
+bench: ## Performance benchmarks (photos pipeline + manifest build)
+	$(GO) test ./internal/server/photos/ ./internal/server/manifest/ -run xxx -bench . -benchmem
+
+.PHONY: soak
+soak: ## Long-duration reliability: repeated race suites + sustained mixed load
+	$(GO) test ./... -race -count=3
+	OPENFRAME_SOAK_SECONDS=$(SOAK_SECONDS) $(GO) test ./internal/server/api/ -run TestSoakMixedLoad -race -count=1 -timeout 2h
+
+export SOAK_SECONDS ?= 60
+
 ## --- Run (development) ----------------------------------------------------
 
 .PHONY: run-server

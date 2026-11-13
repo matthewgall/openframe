@@ -6,10 +6,16 @@ import (
 	"golang.org/x/image/draw"
 )
 
-// toNRGBA converts any decoded image to a flat *image.NRGBA copy so the
+// toNRGBA converts any decoded image to a flat *image.NRGBA so the
 // transform helpers operate on raw pixels (fast, no color-model
-// dispatch per pixel).
+// dispatch per pixel). The common path — JPEG/PNG/WebP decode with
+// normal orientation — is already a zero-origin NRGBA, in which case
+// the 12 MP copy is skipped entirely (M7 perf: that copy was a fixed
+// ~50 MB memmove on every upload).
 func toNRGBA(src image.Image) *image.NRGBA {
+	if n, ok := src.(*image.NRGBA); ok && n.Bounds().Min.X == 0 && n.Bounds().Min.Y == 0 {
+		return n
+	}
 	b := src.Bounds()
 	dst := image.NewNRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
 	draw.Draw(dst, dst.Bounds(), src, b.Min, draw.Src)
@@ -33,10 +39,23 @@ func copyRect(src *image.NRGBA, r image.Rectangle) *image.NRGBA {
 	return dst
 }
 
-// drawBilinear scales src to fill dst (dst dimensions) with a Catmull
-// Rom scaler.
+// drawBilinear scales src to fill dst (dst dimensions).
+//
+// M7 performance: the scaler is chosen by the scale factor.
+//   - Large downscales (>1.5x on any axis — the 12 MP upload path):
+//     ApproxBiLinear, a few times cheaper than CatmullRom; its
+//     aliasing behaviour is not visible at frame-panel resolution
+//     (documented in docs/performance.md).
+//   - Small resizes and upscales: CatmullRom — ApproxBiLinear is
+//     measurably SLOWER when upscaling (its rgba64 intermediates),
+//     and upscale quality matters more there.
 func drawBilinear(dst, src *image.NRGBA, w, h int) {
-	draw.CatmullRom.Scale(dst, image.Rect(0, 0, w, h), src, src.Bounds(), draw.Over, nil)
+	sb := src.Bounds()
+	var scaler draw.Scaler = draw.CatmullRom
+	if float64(sb.Dx())/float64(w) > 1.5 || float64(sb.Dy())/float64(h) > 1.5 {
+		scaler = draw.ApproxBiLinear
+	}
+	scaler.Scale(dst, image.Rect(0, 0, w, h), src, sb, draw.Over, nil)
 }
 
 // rotate90CW rotates a flat NRGBA image 90 degrees clockwise.

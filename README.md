@@ -14,8 +14,9 @@ frame application and (from milestone 6) the signed auto-updater.
 
 ## Status
 
-OpenFrame is under active development in milestones. **Milestone 6
-(Secure updater)** is complete:
+OpenFrame is under active development in milestones. **Milestone 7
+(Production hardening)** is complete — the platform is feature-
+complete against the specification:
 
 | Milestone | Scope | Status |
 |---|---|---|
@@ -25,7 +26,7 @@ OpenFrame is under active development in milestones. **Milestone 6
 | 4 | Touchscreen interface: DRM/KMS renderer, slideshow, gallery, search, settings, touch, sleep, thermal | ✅ complete (hardware validation pending) |
 | 5 | Multi-frame management: pairing protocol, health reporting, per-frame config, admin dashboard | ✅ complete |
 | 6 | Secure updater: A/B slots, signed releases, rollback, channels, staged rollout, admin releases | ✅ complete (hardware validation pending) |
-| 7 | Production hardening: backups, security review, long-run reliability | planned |
+| 7 | Production hardening: backup/restore + recovery tests, security review, performance, production runbook, soak | ✅ complete (Pi hardware validation carried as the sole open item) |
 
 See [docs/architecture/overview.md](docs/architecture/overview.md) for the
 system design and [docs/adr/](docs/adr/) for recorded decisions.
@@ -39,6 +40,8 @@ openframe pair      # device identity + pairing state and next steps
 openframe doctor    # diagnose the local system (human or --json)
 openframe status    # show local OpenFrame status
 openframe update    # frame-side update ops: status | check | request | reset | set-channel
+openframe backup    # back up + verify data (M7): server | frame | verify
+openframe restore   # restore from a verified backup (M7): server | frame
 openframe version   # print version information (--json)
 
 openframe-updater   # root A/B slot updater (separate binary, M6)
@@ -245,14 +248,37 @@ an offline rollback.
 An unavailable update server never affects the slideshow or
 synchronisation.
 
+## Backups and recovery (M7)
+
+Backups are self-verifying directories (per-file SHA-256 manifest +
+`PRAGMA integrity_check`) that can be taken **while the service runs**
+(consistent `VACUUM INTO` database snapshot):
+
+```bash
+openframe backup server --out /mnt/backups/server-$(date +%F)
+openframe backup verify --dir /mnt/backups/server-...
+openframe restore server --from /mnt/backups/server-... --yes
+```
+
+Restore re-verifies before touching anything, preserves existing live
+data as `.pre-restore-*`, and leaves the backup intact for reuse. The
+frame side works the same way (`backup/restore frame`). Scheduling,
+off-host storage and the breach-rebuild runbook:
+[docs/deployment/production.md](docs/deployment/production.md).
+
+Measured performance and the soak procedure:
+[docs/performance.md](docs/performance.md).
+
 ## Building
 
 ```bash
-make build        # host binary
+make build        # host binaries (openframe + openframe-updater)
 make build-all    # linux/amd64 + linux/arm64 in dist/ with SHA256SUMS.txt
 make test         # unit + integration tests
 make test-race    # with race detector
 make vuln         # govulncheck
+make bench        # performance benchmarks (photos pipeline, manifest)
+make soak         # long-duration reliability: repeated race suites + load
 make web          # rebuild the admin SPA (requires Node)
 ```
 
@@ -283,6 +309,7 @@ internal/
   server/pairing/       M5 pairing store (codes, rate limits, one-time claims)
   server/devices/       M3+M5 credentials, health, per-frame config
   server/manifest/      frame manifest builder (M3, M5 config block)
+  backup/               M7 backup/restore (self-verifying snapshot dirs)
   logging/              slog setup
   platform/             host introspection (doctor)
   protocol/             wire protocol version constants
@@ -294,7 +321,8 @@ web/
   admin/                admin SPA (Vite + TypeScript, source)
   admin/dist/           built SPA (committed, embedded in the binary)
   embed.go              embed + static serving
-docs/                   architecture, API, hardware, security, ADRs
+docs/                   architecture, API, deployment, hardware, security,
+                        performance, updater, ADRs
 .github/workflows/      CI (PR checks) and release pipeline
 ```
 
@@ -303,10 +331,12 @@ docs/                   architecture, API, hardware, security, ADRs
 - [Architecture overview](docs/architecture/overview.md)
 - [REST API conventions](docs/api/overview.md)
 - [Development guide](docs/development.md)
+- [Production deployment runbook](docs/deployment/production.md)
 - [Hardware: Raspberry Pi 3B+](docs/hardware/pi-3b-plus.md)
-- [Threat model](docs/security/threat-model.md)
+- [Threat model](docs/security/threat-model.md) + [M7 security review](docs/security/review.md)
 - [Updater trust model](docs/updater/trust-model.md)
 - [Updater deployment + operations](docs/updater/deployment.md)
+- [Performance + soak](docs/performance.md)
 - [Architecture decision records](docs/adr/README.md)
 
 ## License

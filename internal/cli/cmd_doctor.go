@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/matthewgall/openframe/internal/db"
@@ -205,6 +206,40 @@ func runDoctor(args []string) int {
 		add("updater", checkOK, "A/B slot layout present at /opt/openframe")
 	} else {
 		add("updater", checkWarn, "A/B slot layout not installed yet (arrives with the deployment package, milestone 6)")
+	}
+
+	// 15. Security posture (M7, threat model T-01/T-02/T-09):
+	//     credential 0600 and private data dirs are hard fails; a
+	//     root invocation or non-https server URL is a context
+	//     warning (diagnosing as root is legitimate; TLS is enforced
+	//     at the deployment layer).
+	secFails, secWarns := []string{}, []string{}
+	if os.Geteuid() == 0 {
+		secWarns = append(secWarns, "doctor runs as root here — the frame service itself must run as an unprivileged user (T-01)")
+	}
+	credPath := filepath.Join(frameDir, "credential")
+	if fi, err := os.Stat(credPath); err == nil {
+		if fi.Mode().Perm() != 0o600 {
+			secFails = append(secFails, fmt.Sprintf("credential file is %o, must be 0600 (T-02)", fi.Mode().Perm()))
+		}
+	} else if err != os.ErrNotExist {
+		secFails = append(secFails, fmt.Sprintf("credential stat: %v", err))
+	}
+	for _, d := range []string{cfg.DataDir, frameDir} {
+		if fi, err := os.Stat(d); err == nil && fi.Mode().Perm()&0o077 != 0 {
+			secFails = append(secFails, fmt.Sprintf("%s is group/other accessible (%o) — the credential would leak (T-02)", d, fi.Mode().Perm()))
+		}
+	}
+	if cfg.Frame.ServerURL != "" && !strings.HasPrefix(cfg.Frame.ServerURL, "https://") {
+		secWarns = append(secWarns, "frame.server_url is not https — credentials and photos would cross the network in the clear (T-09; TLS is a deployment requirement)")
+	}
+	switch {
+	case len(secFails) > 0:
+		add("security", checkFail, joinDetails(append(secFails, secWarns...)))
+	case len(secWarns) > 0:
+		add("security", checkWarn, joinDetails(secWarns))
+	default:
+		add("security", checkOK, "credential and data-dir permissions correct; transport https")
 	}
 
 	// Render.

@@ -11,15 +11,19 @@
 ## First build & test
 
 ```bash
-make build        # bin/openframe
+make build        # bin/openframe (+ openframe-updater)
 make test         # unit + integration tests
 make test-race    # with the race detector
 make vet          # go vet
 make fmt          # gofmt -w
+make bench        # photos-pipeline + manifest benchmarks
+make soak         # repeated race suites + sustained mixed-load test
 ```
 
 The whole suite runs in a few seconds on a laptop. `make all` runs
-fmt-check, vet, test and build in that order.
+fmt-check, vet, test and build in that order. `make soak` is the
+long-duration reliability gate (default 60 s load; `SOAK_SECONDS=3600
+make soak` for an overnight run) — see `docs/performance.md`.
 
 ## Running locally
 
@@ -192,8 +196,24 @@ The UI's pairing screen and the frames dashboard are covered by the
 existing headless E2E (`TestE2ETouchscreenDisplay`) and the
 `ui.Engine` unit tests respectively.
 
+## Backups (M7)
+
+```bash
+openframe backup server --out DIR     # online-consistent server snapshot
+openframe backup frame  --out DIR     # frame db + credential (+ state)
+openframe backup verify --dir DIR     # re-hash + integrity check
+openframe restore server --from DIR --yes
+openframe restore frame  --from DIR --yes
+```
+
+Backups are plain self-verifying directories (manifest + per-file
+SHA-256 + `PRAGMA integrity_check`); restore re-verifies before
+touching anything and preserves existing live data as
+`.pre-restore-*`. Operational details: `docs/deployment/production.md`.
+
 ## What is deliberately not here yet
 
-- Auto-updater (M6) — `internal/updater/` is an empty boundary package.
-- Production hardening (M7): backups/exports, long-run soak,
-  security review pass.
+- Passkeys for admin sign-in (design is passkey-ready; post-M7).
+- Optional LUKS on the frame data partition (documented operator
+  option in the production runbook).
+- Hardware validation of the full stack on the Pi (carried since M4).
