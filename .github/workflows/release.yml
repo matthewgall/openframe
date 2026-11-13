@@ -1,12 +1,14 @@
 name: Release
 
-# Builds versioned binaries on tags. Artifact signing of release metadata
-# (Ed25519, trusted-key pinning) and channel promotion are implemented
-# with the updater in milestone 6 — until then this workflow produces
-# unsigned-but-hash-verified artifacts for the release pipeline.
+# Builds versioned binaries on tags. Artifact signing of release
+# metadata (Ed25519, trusted-key pinning) and channel promotion are
+# implemented with the updater in milestone 6 — until then this
+# workflow produces unsigned-but-hash-verified artifacts for the
+# release pipeline.
 #
-# Signing key material is NEVER referenced here; the M6 release job will
-# sign via an OIDC-permissioned external signer (see docs/adr/ADR-0007).
+# Signing key material is NEVER referenced here; the M6 release job
+# will sign via an OIDC-permissioned external signer (see
+# docs/adr/ADR-0007).
 on:
   push:
     tags:
@@ -20,56 +22,85 @@ env:
   GO_VERSION: "1.26.11"
 
 jobs:
-  release:
+  # Gate: tags do not trigger the main CI workflow, so a release must
+  # pass the full suite itself before anything is published.
+  check:
+    name: tests (race)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [amd64, arm64]
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
-      - name: Build
+      - name: Test
+        run: go test ./... -race -count=1
+
+  # Both binaries ship in every release (frame + privileged updater,
+  # M6) for every supported target — the codebase is pure Go, so all
+  # of these are plain cross-compiles in one warm-cache runner.
+  release:
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Build (all targets, both binaries)
         env:
           CGO_ENABLED: "0"
-          GOOS: linux
-          GOARCH: ${{ matrix.arch }}
         run: |
           VERSION=${GITHUB_REF_NAME#v}
-          go build -trimpath \
-            -ldflags "-s -w \
-              -X github.com/matthewgall/openframe/internal/version.Version=${VERSION} \
-              -X github.com/matthewgall/openframe/internal/version.Commit=${GITHUB_SHA::12} \
-              -X github.com/matthewgall/openframe/internal/version.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            -o openframe-linux-${{ matrix.arch }} ./cmd/openframe
-      - name: Checksums
-        run: sha256sum openframe-linux-${{ matrix.arch }} > openframe-linux-${{ matrix.arch }}.sha256
+          DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          LDFLAGS="-s -w \
+            -X github.com/matthewgall/openframe/internal/version.Version=${VERSION} \
+            -X github.com/matthewgall/openframe/internal/version.Commit=${GITHUB_SHA::12} \
+            -X github.com/matthewgall/openframe/internal/version.Date=${DATE}"
+          mkdir -p dist
+          build() { # os arch name [goarm]
+            os=$1; arch=$2; name=$3; goarm=$4
+            for c in openframe openframe-updater; do
+              out="dist/openframe-${os}-${name}/${c}"
+              [ "$os" = "windows" ] && out="${out}.exe"
+              GOOS="$os" GOARCH="$arch" GOARM="$goarm" go build -trimpath -ldflags "$LDFLAGS" -o "$out" "./cmd/$c"
+              echo "built ${out}"
+            done
+          }
+          build linux   amd64   amd64
+          build linux   arm64   arm64
+          build linux   386     386
+          build linux   riscv64 riscv64
+          build linux   arm     armv6 6
+          build linux   arm     armv7 7
+          build darwin  amd64   amd64
+          build darwin  arm64   arm64
+          build windows amd64   amd64
+          build windows arm64   arm64
+          (cd dist && find . -type f ! -name SHA256SUMS.txt -exec sha256sum {} \; | sort -k2 > SHA256SUMS.txt)
       - uses: actions/upload-artifact@v7
         with:
-          name: release-linux-${{ matrix.arch }}
-          path: |
-            openframe-linux-${{ matrix.arch }}
-            openframe-linux-${{ matrix.arch }}.sha256
+          name: openframe-release
+          path: dist
 
   publish:
     needs: release
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/download-artifact@v8
         with:
-          path: artifacts
-          merge-multiple: true
+          name: openframe-release
+          path: dist
       - name: Verify checksums
         run: |
-          cd artifacts
-          for f in *.sha256; do sha256sum -c --quiet "$f" || exit 1; done
+          cd dist
+          sha256sum -c --quiet SHA256SUMS.txt
       - uses: softprops/action-gh-release@v3
         with:
           files: |
-            artifacts/openframe-linux-*
-            artifacts/*.sha256
+            dist/**
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

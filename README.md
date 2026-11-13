@@ -273,7 +273,7 @@ Measured performance and the soak procedure:
 
 ```bash
 make build        # host binaries (openframe + openframe-updater)
-make build-all    # linux/amd64 + linux/arm64 in dist/ with SHA256SUMS.txt
+make build-all    # all supported targets in dist/ with SHA256SUMS.txt
 make test         # unit + integration tests
 make test-race    # with race detector
 make vuln         # govulncheck
@@ -282,9 +282,12 @@ make soak         # long-duration reliability: repeated race suites + load
 make web          # rebuild the admin SPA (requires Node)
 ```
 
-The Go build requires no C toolchain (pure-Go SQLite driver) and no Node
-(the SPA dist is committed). Cross-compiling for Raspberry Pi 3B+ is a
-plain `CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build`.
+The build is pure Go (no cgo, no Node), so `make build-all` produces
+both binaries for **every** supported target on any host:
+linux/{amd64,arm64,armv6,armv7,386,riscv64}, darwin/{amd64,arm64},
+windows/{amd64,arm64}. The DRM display and evdev touch backends are
+Linux-only (build-tagged); elsewhere the frame runs the headless dev
+renderer. CI cross-compiles the same matrix on every push.
 
 ## Repository layout
 

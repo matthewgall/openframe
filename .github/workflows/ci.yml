@@ -17,43 +17,37 @@ env:
   GO_VERSION: "1.26.11"
 
 jobs:
-  # --- Format & static analysis -----------------------------------------
-  fmt-vet:
-    name: gofmt + go vet
+  # --- Format, vet, tests -------------------------------------------------
+  # One runner: fmt/vet/test all share the same module cache, and the
+  # suite (~4 min) dominates wall time either way.
+  check:
+    name: fmt + vet + tests (race)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: false
       - name: gofmt
         run: |
           out=$(gofmt -l .)
           if [ -n "$out" ]; then echo "unformatted files:"; echo "$out"; exit 1; fi
       - name: go vet
         run: go vet ./...
-
-  # --- Tests -------------------------------------------------------------
-  test:
-    name: tests (race)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version: ${{ env.GO_VERSION }}
       - name: Test
         run: go test ./... -race -count=1
 
-  # --- Cross-builds ------------------------------------------------------
+  # --- Cross-builds --------------------------------------------------------
+  # Every supported target in ONE job: the codebase is pure Go
+  # (CGO_ENABLED=0, no cgo), so all of these are plain cross-compiles.
+  # A single warm-cache runner building 20 small binaries beats 10
+  # matrix runners each paying checkout + toolchain setup overhead.
+  # ARM is offered as v6 (32-bit Pi Zero/1) and v7 (32-bit Pi 3/4).
   build:
-    name: build linux/${{ matrix.arch }}
+    name: cross-compile (all targets)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [amd64, arm64]
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -62,33 +56,47 @@ jobs:
       - name: Build
         env:
           CGO_ENABLED: "0"
-          GOOS: linux
-          GOARCH: ${{ matrix.arch }}
         run: |
+          mkdir -p dist
           LDFLAGS="-X github.com/matthewgall/openframe/internal/version.Commit=${GITHUB_SHA::12}"
-          go build -ldflags "$LDFLAGS" -o /tmp/openframe ./cmd/openframe
-          go build -ldflags "$LDFLAGS" -o /tmp/openframe-updater ./cmd/openframe-updater
-      # Only the host-arch binaries can execute on the runner; the other
-      # matrix entry is cross-compiled and verified by the build itself.
+          build() { # os arch name [goarm]
+            os=$1; arch=$2; name=$3; goarm=$4
+            for c in openframe openframe-updater; do
+              out="dist/openframe-${os}-${name}/${c}"
+              [ "$os" = "windows" ] && out="${out}.exe"
+              GOOS="$os" GOARCH="$arch" GOARM="$goarm" go build -ldflags "$LDFLAGS" -o "$out" "./cmd/$c"
+              echo "built ${out}"
+            done
+          }
+          build linux   amd64   amd64
+          build linux   arm64   arm64
+          build linux   386     386
+          build linux   riscv64 riscv64
+          build linux   arm     armv6 6
+          build linux   arm     armv7 7
+          build darwin  amd64   amd64
+          build darwin  arm64   arm64
+          build windows amd64   amd64
+          build windows arm64   arm64
+          (cd dist && find . -type f ! -name SHA256SUMS.txt -exec sha256sum {} \; | sort -k2 > SHA256SUMS.txt)
+      # Only the host-arch binaries can execute on the runner; the
+      # others are verified by the build itself.
       - name: "Smoke: frame version + doctor"
-        if: matrix.arch == 'amd64'
         run: |
-          /tmp/openframe version
-          /tmp/openframe doctor --json | grep -q '"checks"'
+          ./dist/openframe-linux-amd64/openframe version
+          ./dist/openframe-linux-amd64/openframe doctor --json | grep -q '"checks"'
       - name: "Smoke: updater version"
-        if: matrix.arch == 'amd64'
-        run: /tmp/openframe-updater --version
+        run: ./dist/openframe-linux-amd64/openframe-updater --version
       - uses: actions/upload-artifact@v7
         with:
-          name: openframe-linux-${{ matrix.arch }}
-          path: |
-            /tmp/openframe
-            /tmp/openframe-updater
+          name: openframe-binaries
+          path: dist
 
   # --- Web UI build -------------------------------------------------------
   web:
     name: admin SPA build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: web/admin
@@ -97,6 +105,12 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
+      - name: Cache node modules
+        uses: actions/cache@v5
+        with:
+          path: web/admin/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('web/admin/package-lock.json') }}
+          restore-keys: npm-${{ runner.os }}-
       - name: Install
         run: npm ci
       - name: Build
@@ -117,6 +131,7 @@ jobs:
   vuln:
     name: govulncheck
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7

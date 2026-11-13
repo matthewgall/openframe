@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/matthewgall/openframe/internal/db"
-	"github.com/matthewgall/openframe/internal/frame/display/drm"
 	"github.com/matthewgall/openframe/internal/frame/thermal"
 	"github.com/matthewgall/openframe/internal/frame/touch"
 	"github.com/matthewgall/openframe/internal/platform"
@@ -116,27 +115,9 @@ func runDoctor(args []string) int {
 	// 6. Frame database integrity (if present).
 	dbCheck(ctx, "frame database", filepath.Join(frameDir, "frame.db"), add)
 
-	// 7. Display detection: probe every DRM card through the same
-	//    code path the frame uses, so doctor reports what the frame
-	//    will actually see.
-	dispDetails := []string{}
-	panelFound := false
-	for _, card := range drm.ScanCards() {
-		mode, err := drm.Available(card)
-		if err != nil {
-			dispDetails = append(dispDetails, card+": no connected panel ("+shortErr(err)+")")
-			continue
-		}
-		panelFound = true
-		dispDetails = append(dispDetails, card+": "+mode)
-	}
-	if panelFound {
-		add("display", checkOK, joinDetails(dispDetails))
-	} else if len(dispDetails) > 0 {
-		add("display", checkWarn, joinDetails(dispDetails)+" — the headless dev renderer will be used")
-	} else {
-		add("display", checkWarn, "no /dev/dri card found; the headless dev renderer will be used")
-	}
+	// 7. Display detection (platform-split: the DRM backend is
+	//    Linux-only; other platforms report the headless fallback).
+	checkDisplay(add)
 	// The headless visual simulator is the dev-box equivalent of a
 	// panel: note it when configured.
 	if cfg.Frame.Display.SnapshotDir != "" {

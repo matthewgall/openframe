@@ -1,3 +1,5 @@
+//go:build linux
+
 // DRM/KMS ioctls for the frame display driver, in pure Go (ADR-0006,
 // ADR-0002).
 //

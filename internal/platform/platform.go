@@ -14,7 +14,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -70,25 +69,6 @@ func Memory() MemoryInfo {
 		}
 	}
 	return m
-}
-
-// Disk reports usage of the filesystem containing path (falls back to /).
-func Disk(path string) (DiskUsage, error) {
-	var st syscall.Statfs_t
-	p := path
-	if p == "" {
-		p = "/"
-	}
-	if err := syscall.Statfs(p, &st); err != nil {
-		return DiskUsage{}, err
-	}
-	total := int64(st.Blocks) * st.Bsize
-	free := int64(st.Bfree) * st.Bsize
-	return DiskUsage{
-		TotalBytes:  total,
-		FreeBytes:   free,
-		AvailableGB: float64(free) / (1024 * 1024 * 1024),
-	}, nil
 }
 
 // DetectDisplay inspects common Linux display backends.
@@ -160,23 +140,6 @@ func DetectTouch() TouchInfo {
 		}
 	}
 	return info
-}
-
-// readInputName returns the human-readable name of an evdev device, or ""
-// if it cannot be read (permissions). It uses the EVIOCGNAME ioctl.
-func readInputName(path string) string {
-	f, err := os.Open(path)
-	if err != nil {
-		return ""
-	}
-	defer f.Close()
-
-	const eviocgname = 0x80184600 // EVIOCGNAME(32)
-	buf := make([]byte, 32)
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), eviocgname, uintptr(uintptr(len(buf))))
-	_ = errno
-	name := strings.TrimRight(string(buf), "\x00")
-	return name
 }
 
 // Reachable probes a URL over HTTPS/HTTP with a bounded timeout.

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/matthewgall/openframe/internal/platform"
 )
 
 // Service controls the frame application the updater is swapping
@@ -100,7 +102,7 @@ func (p *ProcessService) Start(ctx context.Context) error {
 	cmd.Dir = p.Dir
 	cmd.Stdout = nil
 	cmd.Stderr = nil
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // own process group
+	cmd.SysProcAttr = ownProcessGroupAttr() // own process group
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("updater: start %s: %w", binary, err)
 	}
@@ -116,6 +118,7 @@ func (p *ProcessService) alive() bool {
 	}
 	// Wait is not called synchronously (a goroutine owns it); poll the
 	// process table instead.
+	// Signal 0 is a liveness probe (no signal is sent).
 	err := p.cmd.Process.Signal(syscall.Signal(0))
 	return err == nil
 }
@@ -129,7 +132,7 @@ func (p *ProcessService) Stop(ctx context.Context) error {
 		return nil
 	}
 	proc := p.cmd.Process
-	_ = proc.Signal(syscall.SIGTERM)
+	_ = proc.Signal(termSignal)
 	deadline := time.NewTimer(5 * time.Second)
 	defer deadline.Stop()
 	for {
@@ -321,13 +324,9 @@ var ErrInsufficientDisk = fmt.Errorf("updater: insufficient disk space")
 const MinFreeBytes = 2 * 1024 * 1024 * 1024 // 2 GiB
 
 // DiskFreeBytes returns the free bytes on the filesystem containing
-// dir (Linux statfs).
+// dir.
 func DiskFreeBytes(dir string) (int64, error) {
-	var st syscall.Statfs_t
-	if err := syscall.Statfs(dir, &st); err != nil {
-		return 0, fmt.Errorf("updater: statfs %s: %w", dir, err)
-	}
-	return int64(st.Bavail) * st.Bsize, nil
+	return platform.FreeBytes(dir)
 }
 
 // CheckDiskSpace verifies dir has at least required bytes free.

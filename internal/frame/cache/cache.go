@@ -20,7 +20,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
+
+	"github.com/matthewgall/openframe/internal/platform"
 )
 
 // Variants the frame caches. The server may add more in a later
@@ -188,11 +189,11 @@ func (s *Store) SetQuota(quotaBytes int64) error {
 
 // Free returns the free bytes on the volume holding the cache.
 func (s *Store) Free() (int64, error) {
-	var st syscall.Statfs_t
-	if err := syscall.Statfs(s.dir, &st); err != nil {
-		return 0, fmt.Errorf("cache: statfs: %w", err)
+	free, err := platform.FreeBytes(s.dir)
+	if err != nil {
+		return 0, fmt.Errorf("cache: %w", err)
 	}
-	return int64(st.Bavail) * st.Bsize, nil
+	return free, nil
 }
 
 // HasRoom reports whether a download of n additional bytes can proceed

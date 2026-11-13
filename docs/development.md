@@ -138,22 +138,38 @@ Keep commands side-effect-light: long-running work belongs in the
 anywhere, including a broken production box, and must never reveal
 secrets.
 
-## Cross-compiling for the Pi
+## Cross-compiling (all platforms)
 
-```bash
-make build-all   # linux/amd64 + linux/arm64 into dist/
-```
+The codebase is pure Go (no cgo), so every target below cross-compiles
+with the host toolchain — no cross C toolchain, no qemu. `make
+build-all` builds **both binaries** for all of them into `dist/` with a
+`SHA256SUMS.txt`:
 
-or manually:
+| Target | Notes |
+|---|---|
+| linux/amd64, linux/arm64 | Primary (server on any box; frame on 64-bit Pi OS) |
+| linux/armv6, linux/armv7 | 32-bit Raspberry Pi OS (Pi Zero/1; Pi 3/4) |
+| linux/386, linux/riscv64 | x86 mini-PCs; RISC-V boards |
+| darwin/amd64, darwin/arm64 | macOS development (headless display) |
+| windows/amd64, windows/arm64 | Windows development (headless display) |
+
+Manual example:
 
 ```bash
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o openframe-arm64 ./cmd/openframe
 ```
 
-No cross C toolchain is needed (pure-Go SQLite). The frame binary must
-remain free of cgo graphics dependencies until a hardware display driver
-is added in M4; even then, keep it behind a build tag so the default
-cross-build stays toolchain-free (ADR-0006).
+Platform notes (M7 cross-compile work):
+
+- The DRM/KMS display backend and the evdev touch driver are
+  **Linux-only** (build-tagged). On other platforms `auto` falls back
+  to the headless dev renderer, and `doctor` reports it.
+- Disk-space queries go through `internal/platform.FreeBytes`
+  (`unix.Statfs` on Unix, `GetDiskFreeSpaceEx` on Windows) — never use
+  `syscall.Statfs` directly: its field widths differ across
+  32/64-bit and OS variants.
+- Keep it that way: ADR-0002 (pure-Go) is what makes the full matrix
+  a plain `CGO_ENABLED=0` build.
 
 ## Testing conventions
 

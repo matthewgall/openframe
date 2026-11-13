@@ -13,7 +13,6 @@ LDFLAGS := -X github.com/matthewgall/openframe/internal/version.Version=$(VERSIO
            -X github.com/matthewgall/openframe/internal/version.Commit=$(COMMIT) \
            -X github.com/matthewgall/openframe/internal/version.Date=$(DATE)
 
-GOOS_LINUX := linux
 
 .PHONY: all
 all: fmt-check vet test build
@@ -29,17 +28,30 @@ build: ## Build openframe for the host platform
 		CGO_ENABLED=0 $(GO) build -ldflags "$(LDFLAGS)" -o $(BIN)/$$c ./cmd/$$c; \
 	done
 
+# All supported cross-compile targets (M7): the codebase is pure Go
+# (CGO_ENABLED=0, no cgo), so every verified Go os/arch combination is
+# supported; ARM is offered as v6 (32-bit Pi Zero/1) and v7 (Pi 3/4).
+# Format: "GOOS GOARCH NAME GOARM" (GOARM only when GOARCH=arm).
+
 .PHONY: build-all
-build-all: ## Cross-build linux/amd64 and linux/arm64 (frame + updater)
-	@for c in $(CMDS); do \
-		CGO_ENABLED=0 GOOS=$(GOOS_LINUX) GOARCH=amd64 $(GO) build -ldflags "$(LDFLAGS)" -o $(DIST)/openframe-linux-amd64/$$c ./cmd/$$c; \
-		CGO_ENABLED=0 GOOS=$(GOOS_LINUX) GOARCH=arm64 $(GO) build -ldflags "$(LDFLAGS)" -o $(DIST)/openframe-linux-arm64/$$c ./cmd/$$c; \
+build-all: ## Cross-build every supported target (frame + updater)
+	@for t in \
+		"linux amd64 amd64" "linux arm64 arm64" "linux 386 386" \
+		"linux riscv64 riscv64" "linux arm armv6 6" "linux arm armv7 7" \
+		"darwin amd64 amd64" "darwin arm64 arm64" \
+		"windows amd64 amd64" "windows arm64 arm64"; do \
+		set -- $$t; os=$$1; arch=$$2; name=$$3; goarm=$$4; \
+		for c in $(CMDS); do \
+			out=$(DIST)/openframe-$$os-$$name/$$c; \
+			[ "$$os" = "windows" ] && out="$$out.exe"; \
+			CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch GOARM=$$goarm $(GO) build -ldflags "$(LDFLAGS)" -o "$$out" ./cmd/$$c || exit 1; \
+		done; \
 	done
 	$(MAKE) checksums
 
 .PHONY: checksums
-checksums: ## SHA-256 checksums for dist artifacts (frame + updater)
-	cd $(DIST) && sha256sum openframe-linux-*/openframe openframe-linux-*/openframe-updater > SHA256SUMS.txt
+checksums: ## SHA-256 checksums for dist artifacts (all targets)
+	cd $(DIST) && find . -type f ! -name SHA256SUMS.txt -exec sha256sum {} \; | sort -k2 > SHA256SUMS.txt
 
 ## --- Web admin UI -------------------------------------------------------
 

@@ -16,3 +16,4 @@ they are marked superseded with a pointer.
 | [ADR-0008](ADR-0008-offline-first-sync.md) | Offline-first sync: content-addressed cache, staged activation, additive migrations | accepted |
 | [ADR-0009](ADR-0009-image-support-v1.md) | v1 image support: JPEG/PNG/WebP; HEIC deferred | accepted |
 | [ADR-0010](ADR-0010-logging.md) | Structured logging: log/slog, JSON default | accepted |
+| [ADR-0011](ADR-0011-multi-arch-cross-compile.md) | Multi-architecture support via pure-Go cross-compilation | accepted |
