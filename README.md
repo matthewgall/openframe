@@ -29,8 +29,9 @@ complete against the specification:
 | 7 | Production hardening: backup/restore + recovery tests, security review, performance, production runbook, soak | ✅ complete (Pi hardware validation carried as the sole open item) |
 
 Since M7: **S3-compatible photo storage** (AWS S3, Cloudflare R2,
-MinIO, ...) — `server.photo_storage.backend: s3`, hand-rolled SigV4,
-no cloud SDK (ADR-0012). Local filesystem remains the default.
+MinIO, ...) — `server.photo_storage.backend: s3`, on the official
+aws-sdk-go-v2 (pure Go, no cgo; ADR-0012). Local filesystem remains
+the default.
 
 See [docs/architecture/overview.md](docs/architecture/overview.md) for the
 system design and [docs/adr/](docs/adr/) for recorded decisions.

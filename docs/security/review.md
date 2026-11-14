@@ -97,12 +97,16 @@ New surface, reviewed at implementation:
   (`0640 root:openframe`) or the env form keep it out of world reach;
   the runbook's R2 section says to scope the token to one bucket with
   write access only.
-- **Hand-rolled SigV4**: no third-party signer. Validated against the
-  official AWS `get-vanilla` vector plus a query-ordering vector
-  cross-verified against an independent implementation; the in-test S3
-  server re-checks the shape of every request (Authorization layout,
-  `X-Amz-Date`, payload hash == body hash). It signs only
-  PUT/GET/HEAD/LIST for the `s3` service — re-review if that grows.
+- **aws-sdk-go-v2** (original decision — a hand-rolled SigV4 signer —
+  was revised on the same day in favour of the official SDK, which is
+  the battle-tested reference implementation of the S3 wire protocol):
+  pure Go, no cgo (ADR-0002 holds); CVE surface tracked by
+  `govulncheck` in CI + dependabot. The AWS config is hermetic: static
+  credentials + explicit region, no env-var / shared-file / IMDS
+  discovery, so the server can only reach the configured store. The
+  in-test S3 server re-checks the shape of every request the SDK
+  signs (Authorization layout, `X-Amz-Date`, payload hash — including
+  the legitimate `UNSIGNED-PAYLOAD` form over TLS).
 - **Transport**: all S3 traffic is HTTPS (operator-supplied
   `endpoint`; an `http://` endpoint is the operator's explicit choice,
   as with any self-hosted MinIO — the runbook examples are HTTPS).

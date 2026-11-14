@@ -1,6 +1,6 @@
-# ADR-0012: S3-compatible photo storage with hand-rolled SigV4
+# ADR-0012: S3-compatible photo storage
 
-- **Status**: accepted
+- **Status**: accepted (revised 2026-11-14)
 - **Date**: 2026-11-14
 - **Supersedes**: nothing (extends the storage seam introduced in M2)
 
@@ -25,33 +25,32 @@ preferred:
 
 The constraint set from ADR-0002 (pure Go, `CGO_ENABLED=0`,
 toolchain-free cross-compilation to 10 targets) still applies to any
-new dependency.
+new dependency — and the SDK chosen below satisfies it.
 
 ## Decision
 
-### 1. Hand-rolled AWS SigV4, no cloud SDK
+### 1. The official AWS SDK for Go v2 (`github.com/aws/aws-sdk-go-v2`)
 
-`internal/server/storage/sigv4.go` implements AWS Signature Version 4
-using only `crypto/hmac` + `crypto/sha256` (stdlib). No AWS/Cloudflare
-SDK, no third-party sigv4 library.
+The S3 backend is implemented on `aws-sdk-go-v2/service/s3` (with
+`aws-sdk-go-v2` core + `credentials` for static credentials). Both are
+pure Go with no cgo, so the 10-target cross-compile matrix and the
+`CGO_ENABLED=0` invariant (ADR-0002) are unaffected.
 
-Rationale:
-
-- **Dependency weight**: an SDK (aws-sdk-go-v2) pulls a large module
-  tree into a server whose other dependencies are deliberately small.
-  The subset of S3 we use is PUT / GET (+Range) / HEAD / ListObjectsV2
-  — four HTTP verbs over a well-specified wire format.
-- **Correctness is testable**: the signer is validated against the
-  official AWS test-suite vector (`get-vanilla`) plus a query-ordering
-  vector cross-verified against an independent SigV4 implementation,
-  and the in-test S3 server validates the shape of every request
-  (Authorization layout, X-Amz-Date, payload hash == body hash) so
-  regressions fail loudly.
-- **Portability**: nothing in it constrains the cross-compile matrix.
-
-The signer is deliberately minimal: it signs HTTP requests for the
-`s3` service with query-string auth disabled, which is all this
-application needs.
+**Revision note (2026-11-14, same day):** this ADR was originally
+written with a hand-rolled SigV4 signer + thin HTTP client (stdlib
+only, no cloud SDK), on the grounds that the operation set is small
+(4 verbs) and dependency weight was worth avoiding. After review it
+was replaced by the official SDK. The SDK is the battle-tested
+reference implementation of the S3 wire protocol: it knows the
+provider quirks (addressing rules, checksum semantics, retry and
+throttle behaviour, error shapes) that thousands of deployments have
+hammered into it, and it is what AWS's own tooling ships. A hand-
+rolled client, however well tested, would have to re-learn that
+long tail (e.g. HTTPS PUTs legitimately signed with
+`UNSIGNED-PAYLOAD`, 416 error shapes, non-conformant providers) every
+time behaviour drifts. The dependency cost is acceptable: the module
+tree is well-maintained, pure Go, and stays within the
+`govulncheck`-monitored dependency set.
 
 ### 2. One backend, many stores
 
@@ -68,32 +67,41 @@ server:
       bucket: family-photos
       access_key_id: ...
       secret_access_key: ...
-      path_style: true     # R2/MinIO; AWS S3 uses virtual-host
+      path_style: true     # R2/MinIO; leave false for AWS S3
       prefix: ""           # optional namespace inside the bucket
 ```
 
-`endpoint` empty → `https://s3.<region>.amazonaws.com` (AWS). Env
-overlay works per-field (`OPENFRAME_SERVER_PHOTO_STORAGE_S3_*`).
+`endpoint` empty → AWS (the SDK derives the regional endpoint from
+`region`). Env overlay works per-field
+(`OPENFRAME_SERVER_PHOTO_STORAGE_S3_*`).
 
-### 3. The Storage contract is the seam
+### 3. Hermetic AWS configuration
+
+The `aws.Config` is built from OpenFrame config only — **static
+credentials and the explicit region**. No env-var discovery, no
+shared-credentials files, no IMDS probing. The server talks to
+exactly the store named in `openframe.yaml` and nothing else, which
+matters for a box that also serves frames (T-06) and for predictable
+failures.
+
+### 4. The Storage contract is the seam
 
 `S3Storage` implements the same interface with the same semantics as
 `LocalFS`:
 
-- `Put` re-hashes the upload in memory (it must hold the bytes for
-  the `X-Amz-Content-Sha256` header anyway) and verifies
-  content-addressed originals against their key; it then HEADs the
+- `Put` buffers the body, verifies content-addressed originals
+  against their key (the key IS the SHA-256 of the bytes), HEADs the
   key and skips if the object already exists (LocalFS parity — an
   existing content-addressed object is never rewritten).
-- `OpenAt` uses `Range: bytes=N-`; a 416 (offset past end) maps to an
+- `OpenAt` uses a ranged GET; a 416 (offset past end) maps to an
   immediate-EOF reader, matching `LocalFS` seek-past-EOF behaviour.
-- 404 maps to the shared `ErrNotFound`; retryable errors (network,
-  503, 5xx) retry with short backoff (250ms/1s, 3 attempts) because
-  every operation is idempotent.
-- `TotalUsage` lists with `ListObjectsV2` (paginated, 30s cache,
-  same as local).
+- 404 (`NoSuchKey`/`NotFound`) maps to the shared `ErrNotFound`.
+- Transient failures retry with the SDK's standard retryer
+  (3 attempts, jittered backoff); every operation is idempotent.
+- `TotalUsage` uses the `ListObjectsV2` paginator (30s cache, same as
+  local).
 
-### 4. Scope limits (v1)
+### 5. Scope limits (v1)
 
 - **No server-side encryption config** (SSE) beyond what the bucket
   defaults to; bucket-level SSE remains operator policy.
@@ -117,14 +125,19 @@ overlay works per-field (`OPENFRAME_SERVER_PHOTO_STORAGE_S3_*`).
   S3 reachability via a one-key ListObjectsV2).
 - New code paths are all behind the existing `Storage` interface; the
   upload pipeline, manifest, and frame sync are backend-agnostic.
-- SigV4 signing is a new cryptographic surface: it is covered by
-  vector tests in `internal/server/storage/sigv4_test.go` and by the
-  request-shape validation in `s3_test.go`. It should be re-reviewed
-  if the signed-operation set grows beyond PUT/GET/HEAD/LIST.
+- Signing, addressing and retries are the SDK's responsibility. Test
+  coverage lives at the `Storage` interface boundary: the in-test S3
+  server validates the SigV4 shape of every request the SDK produces
+  (Authorization layout, `X-Amz-Date`, payload hash — including the
+  legitimate `UNSIGNED-PAYLOAD` form used over TLS), and a live e2e
+  runs the real API + pipeline against it.
+- The SDK is a large surface for CVEs to land in: it is covered by
+  `govulncheck` in CI and by dependabot's Go ecosystem, and the
+  pinned versions are visible in `go.mod`.
 
 ## Related
 
-- ADR-0002 (pure Go, no cgo — constrains dependency choices)
+- ADR-0002 (pure Go, no cgo — the SDK satisfies this)
 - ADR-0003 (config layering — env overlay for secrets)
 - `docs/deployment/production.md` (R2 setup + backup scope)
 - `docs/security/threat-model.md` (T-06: credentials at rest)

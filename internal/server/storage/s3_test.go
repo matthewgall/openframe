@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awretry "github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/matthewgall/openframe/internal/config"
 )
 
@@ -25,8 +27,11 @@ import (
 // actual body hash), so a signing regression fails every test, not
 // just the vector tests.
 type fakeS3 struct {
-	t        *testing.T
+	t *testing.T
+	// mu guards objs; failMu guards the counters only — never held at the
+	// same time as mu (fail() can be called while mu is held).
 	mu       sync.Mutex
+	failMu   sync.Mutex
 	objs     map[string][]byte
 	bucket   string
 	pageSize int // forced List page size (exercises pagination)
@@ -35,6 +40,7 @@ type fakeS3 struct {
 	requests     int
 	putRequests  int
 	authFailures int
+	virtual      int // object ops received via virtual-host addressing
 }
 
 var authRe = regexp.MustCompile(`^AWS4-HMAC-SHA256 Credential=AKID/(\d{8})/(\w[\w-]*)/s3/aws4_request, SignedHeaders=[a-z0-9;-]+, Signature=[0-9a-f]{64}$`)
@@ -43,6 +49,16 @@ func newFakeS3(t *testing.T, bucket string, pageSize int) (*fakeS3, *httptest.Se
 	t.Helper()
 	f := &fakeS3{t: t, objs: map[string][]byte{}, bucket: bucket, pageSize: pageSize}
 	ts := httptest.NewServer(http.HandlerFunc(f.ServeHTTP))
+	t.Cleanup(ts.Close)
+	return f, ts
+}
+
+// newFakeS3TLS is newFakeS3 over TLS — needed when the client dials an
+// https:// endpoint (AWS-shaped) while actually hitting the test server.
+func newFakeS3TLS(t *testing.T, bucket string, pageSize int) (*fakeS3, *httptest.Server) {
+	t.Helper()
+	f := &fakeS3{t: t, objs: map[string][]byte{}, bucket: bucket, pageSize: pageSize}
+	ts := httptest.NewTLSServer(http.HandlerFunc(f.ServeHTTP))
 	t.Cleanup(ts.Close)
 	return f, ts
 }
@@ -61,9 +77,9 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// --- SigV4 shape validation (failure = test failure) ---
 	fail := func(format string, args ...any) {
-		f.mu.Lock()
+		f.failMu.Lock()
 		f.authFailures++
-		f.mu.Unlock()
+		f.failMu.Unlock()
 		w.WriteHeader(http.StatusForbidden)
 		fmt.Fprintf(w, "<Error><Code>SignatureDoesNotMatch</Code><Message>%v</Message></Error>", fmt.Sprintf(format, args...))
 		f.t.Errorf("request failed SigV4 validation: %v", fmt.Sprintf(format, args...))
@@ -83,10 +99,19 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// --- Routing (path-style) ---
+	// --- Routing (path-style or virtual-host) ---
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	if len(parts) < 1 || parts[0] != f.bucket {
-		fail("path %q does not start with bucket %q", r.URL.Path, f.bucket)
+	var keyPath string
+	if len(parts) > 0 && parts[0] == f.bucket {
+		keyPath = strings.Join(parts[1:], "/") // path-style: bucket in path
+	} else if strings.HasPrefix(r.Host, f.bucket+".") {
+		keyPath = strings.Join(parts, "/") // virtual-host: bucket in Host
+		f.mu.Lock()
+		f.virtual++
+		f.mu.Unlock()
+	} else {
+		fail("addressing: path %q host %q — bucket %q in neither", r.URL.Path, r.Host, f.bucket)
+		return
 	}
 	isList := r.URL.Query().Get("list-type") == "2"
 
@@ -104,15 +129,18 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		sum := sha256.Sum256(body)
-		if want := r.Header.Get("X-Amz-Content-Sha256"); hex.EncodeToString(sum[:]) != want {
-			fail("payload hash %s does not match body hash %s", want, hex.EncodeToString(sum[:]))
+		gotHash := r.Header.Get("X-Amz-Content-Sha256")
+		wantHash := hex.EncodeToString(sum[:])
+		// Over TLS, S3 clients may sign with UNSIGNED-PAYLOAD (integrity
+		// comes from TLS); plain-HTTP uploads carry the real body hash.
+		if gotHash != wantHash && gotHash != "UNSIGNED-PAYLOAD" {
+			fail("payload hash %s does not match body hash %s (or UNSIGNED-PAYLOAD)", gotHash, wantHash)
 			return
 		}
-		key := strings.Join(parts[1:], "/")
-		f.objs[key] = body
+		f.objs[keyPath] = body
 		w.Header().Set("ETag", `"`+hex.EncodeToString(sum[:])+`"`)
 	case r.Method == http.MethodGet:
-		key := strings.Join(parts[1:], "/")
+		key := keyPath
 		obj, ok := f.objs[key]
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
@@ -127,7 +155,9 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if off >= int64(len(obj)) {
+				// S3 answers a non-satisfiable range with 416 + error XML.
 				w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+				fmt.Fprint(w, `<Error><Code>InvalidRange</Code><Message>Requested range not satisfiable</Message></Error>`)
 				return
 			}
 			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", off, int64(len(obj))-1, len(obj)))
@@ -137,7 +167,7 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Write(obj)
 	case r.Method == http.MethodHead:
-		key := strings.Join(parts[1:], "/")
+		key := keyPath
 		obj, ok := f.objs[key]
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
@@ -202,13 +232,33 @@ func newTestS3(t *testing.T, mut func(*config.S3Config)) (*S3Storage, *fakeS3) {
 	}
 	f, ts := newFakeS3(t, cfg.Bucket, 2)
 	cfg.Endpoint = ts.URL
-	s, err := NewS3(cfg, ts.Client())
+	s, err := newS3(cfg, ts.Client(), func(c *aws.Config) {
+		c.Retryer = func() aws.Retryer {
+			return fastRetryer{inner: awretry.NewStandard(func(o *awretry.StandardOptions) { o.MaxAttempts = 3 }), delay: 2 * time.Millisecond}
+		}
+	})
 	if err != nil {
 		t.Fatalf("NewS3: %v", err)
 	}
-	s.backoff = []time.Duration{time.Millisecond, 2 * time.Millisecond}
 	return s, f
 }
+
+// fastRetryer wraps the SDK's standard retryer with a fixed short
+// delay so retry tests run in milliseconds.
+type fastRetryer struct {
+	inner aws.Retryer
+	delay time.Duration
+}
+
+func (f fastRetryer) IsErrorRetryable(err error) bool { return f.inner.IsErrorRetryable(err) }
+func (f fastRetryer) MaxAttempts() int                { return f.inner.MaxAttempts() }
+func (f fastRetryer) RetryDelay(int, error) (time.Duration, error) {
+	return f.delay, nil
+}
+func (f fastRetryer) GetRetryToken(ctx context.Context, opErr error) (func(error) error, error) {
+	return f.inner.GetRetryToken(ctx, opErr)
+}
+func (f fastRetryer) GetInitialToken() func(error) error { return f.inner.GetInitialToken() }
 
 // hashKey returns a key that IS the sha256 of data (content-addressed).
 func hashKey(t *testing.T, data []byte) Key {
@@ -252,8 +302,14 @@ func TestS3PutGetRoundTrip(t *testing.T) {
 	if err != nil || total != int64(len(data)+len(deriv)) {
 		t.Fatalf("TotalUsage = %d, %v; want %d", total, err, len(data)+len(deriv))
 	}
-	if f.requests == 0 || f.authFailures != 0 {
-		t.Fatalf("requests=%d authFailures=%d", f.requests, f.authFailures)
+	f.mu.Lock()
+	requests := f.requests
+	f.mu.Unlock()
+	f.failMu.Lock()
+	authFailures := f.authFailures
+	f.failMu.Unlock()
+	if requests == 0 || authFailures != 0 {
+		t.Fatalf("requests=%d authFailures=%d", requests, authFailures)
 	}
 }
 
@@ -290,8 +346,11 @@ func TestS3PutDedupSkips(t *testing.T) {
 			t.Fatalf("Put %d: %v", i, err)
 		}
 	}
-	if f.putRequests != 1 {
-		t.Fatalf("PUT requests = %d, want 1 (second Put must skip)", f.putRequests)
+	f.mu.Lock()
+	puts := f.putRequests
+	f.mu.Unlock()
+	if puts != 1 {
+		t.Fatalf("PUT requests = %d, want 1 (second Put must skip)", puts)
 	}
 }
 
@@ -489,55 +548,85 @@ func keysOf(f *fakeS3) []string {
 	return out
 }
 
-// TestS3VirtualHostURL checks URL construction for AWS-style
-// virtual-host addressing (no live HTTP: the bucket subdomain of an
-// httptest host would not resolve).
-func TestS3VirtualHostURL(t *testing.T) {
-	cfg := config.S3Config{
-		Endpoint: "https://s3.us-east-1.amazonaws.com", Region: "us-east-1",
-		Bucket: "mybucket", AccessKeyID: "AKID", SecretAccessKey: "SECRET", PathStyle: false,
+// TestS3Validation checks NewS3's config validation.
+func TestS3Validation(t *testing.T) {
+	if _, err := NewS3(config.S3Config{Endpoint: "https://x", Region: "auto", AccessKeyID: "a", SecretAccessKey: "s"}, nil); err == nil {
+		t.Error("missing bucket: expected error")
 	}
-	s, err := NewS3(cfg, nil)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := NewS3(config.S3Config{Endpoint: "not a url", Region: "auto", Bucket: "b", AccessKeyID: "a", SecretAccessKey: "s"}, nil); err == nil {
+		t.Error("bad endpoint: expected error")
 	}
-	u, err := s.buildRequest("abcd.display", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if u.Host != "mybucket.s3.us-east-1.amazonaws.com" || u.Path != "/abcd.display" {
-		t.Fatalf("virtual object URL = %s%s, want mybucket.s3.../abcd.display", u.Host, u.Path)
-	}
-	u, err = s.buildRequest("", true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if u.Host != "mybucket.s3.us-east-1.amazonaws.com" || u.Path != "/" {
-		t.Fatalf("virtual list URL = %s%s", u.Host, u.Path)
-	}
-
-	// Path-style keeps the bucket in the path.
-	cfg.PathStyle = true
-	s, _ = NewS3(cfg, nil)
-	u, _ = s.buildRequest("abcd.display", false)
-	if u.Host != "s3.us-east-1.amazonaws.com" || u.Path != "/mybucket/abcd.display" {
-		t.Fatalf("path-style URL = %s%s", u.Host, u.Path)
+	// Empty endpoint is valid (AWS regional endpoint, derived by the SDK
+	// from the region).
+	if _, err := NewS3(config.S3Config{Region: "eu-central-1", Bucket: "b", AccessKeyID: "a", SecretAccessKey: "s"}, nil); err != nil {
+		t.Fatalf("empty endpoint should be valid (AWS): %v", err)
 	}
 }
 
-// TestS3DefaultEndpointDerivation: empty endpoint + region -> AWS
-// regional endpoint.
-func TestS3DefaultEndpointDerivation(t *testing.T) {
+// hostRewritingRT dials a fixed host while preserving the request's
+// intended Host header. This lets virtual-host addressing be tested
+// against an httptest server, whose bucket subdomain would not resolve.
+type hostRewritingRT struct {
+	to string
+	rt http.RoundTripper // must trust the test server's certificate
+}
+
+func (h hostRewritingRT) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	if clone.Host == "" {
+		clone.Host = clone.URL.Host // pin the intended virtual-host header
+	}
+	clone.URL.Host = h.to
+	return h.rt.RoundTrip(clone)
+}
+
+// TestS3VirtualHostAddressing verifies that with an AWS endpoint and
+// path_style: false the SDK addresses objects via the Host header
+// (bucket.<endpoint-host>) with the bucket OUT of the path — the AWS
+// S3 style. (For non-AWS endpoints the SDK always uses path-style,
+// which is what R2/MinIO want — covered by every other test here.)
+//
+// The client is pointed at an AWS-shaped endpoint but a host-rewriting
+// transport dials the TLS test server instead (the bucket subdomain of
+// an httptest host would not resolve).
+func TestS3VirtualHostAddressing(t *testing.T) {
 	cfg := config.S3Config{
-		Region: "eu-central-1", Bucket: "b",
-		AccessKeyID: "AKID", SecretAccessKey: "SECRET",
+		Region: "us-east-1", Bucket: "test-bucket",
+		AccessKeyID: "AKID", SecretAccessKey: "SECRET", PathStyle: false,
 	}
-	s, err := NewS3(cfg, nil)
+	f, ts := newFakeS3TLS(t, cfg.Bucket, 100)
+	cfg.Endpoint = "https://s3.us-east-1.amazonaws.com"
+	host := strings.TrimPrefix(ts.URL, "https://")
+	base, ok := ts.Client().Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("unexpected test transport %T", ts.Client().Transport)
+	}
+	hc := &http.Client{Transport: hostRewritingRT{to: host, rt: base.Clone()}}
+	s, err := newS3(cfg, hc, func(c *aws.Config) {
+		c.Retryer = func() aws.Retryer {
+			return fastRetryer{inner: awretry.NewStandard(func(o *awretry.StandardOptions) { o.MaxAttempts = 3 }), delay: time.Millisecond}
+		}
+	})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("newS3: %v", err)
 	}
-	if s.endpoint.String() != "https://s3.eu-central-1.amazonaws.com" {
-		t.Fatalf("default endpoint = %s", s.endpoint)
+	ctx := context.Background()
+
+	data := []byte("virtual host bytes")
+	key := hashKey(t, data)
+	if err := s.Put(ctx, key, bytes.NewReader(data)); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	got, err := io.ReadAll(mustOpen(t, s, ctx, key))
+	if err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("Open = %q, %v", got, err)
+	}
+
+	f.mu.Lock()
+	virtual, total := f.virtual, f.requests
+	f.mu.Unlock()
+	if virtual == 0 {
+		t.Fatalf("no virtual-host requests received (requests=%d); SDK used path-style", total)
 	}
 }
 

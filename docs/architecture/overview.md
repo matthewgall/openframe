@@ -58,7 +58,7 @@ internal/server
 │                    approval → device + one-time credential claim
 ├── manifest/        frame manifest builder (content revision + M5 config revision)
 ├── storage/         Storage interface + content-addressed local FS backend (Range reads
-│                    for resume) + S3-compatible backend (hand-rolled SigV4, ADR-0012)
+│                    for resume) + S3-compatible backend (aws-sdk-go-v2, ADR-0012)
 └── audit/           append-only audit recorder (JSON detail, no secrets)
 ```
 
