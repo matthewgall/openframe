@@ -202,7 +202,13 @@ export function isAuthed(): boolean {
   return session.user !== null;
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+// Method is a literal union so a path/method argument swap is a
+// compile error (tsc --noEmit runs in every build), not a runtime
+// "Invalid request method" — the logout handler shipped exactly that
+// bug before this typing existed.
+type Method = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE' | 'HEAD' | 'OPTIONS';
+
+async function request<T>(method: Method, path: string, body?: unknown): Promise<T> {
   const opts: RequestInit = { method, credentials: 'same-origin' };
   if (body !== undefined) {
     opts.body = JSON.stringify(body);
@@ -259,7 +265,7 @@ export async function login(email: string, password: string): Promise<void> {
 
 export async function logout(): Promise<void> {
   try {
-    await request('/api/v1/auth/logout', 'POST', {});
+    await request('POST', '/api/v1/auth/logout', {});
   } finally {
     session.user = null;
     session.csrf = null;

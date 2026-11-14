@@ -147,6 +147,11 @@ function openAccountMenu(anchor: HTMLElement, onDone: () => void): void {
 function renderApp(root: HTMLElement, onUnauthed: () => void): void {
   const me = currentUser();
 
+  // Own the whole root: this is also called from the login form's
+  // onAuthed callback, where the login view is still mounted and must
+  // be removed (otherwise the form stays visible above the dashboard).
+  root.replaceChildren();
+
   const header = h('header');
   header.append(
     h('div', { class: 'logo' }, 'Open', h('span', {}, 'Frame')),
