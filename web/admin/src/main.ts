@@ -14,25 +14,23 @@ import { renderUsers } from './views/users';
 interface Section {
   id: string;
   title: string;
-  badge: string;
   adminOnly?: boolean;
   render: (el: HTMLElement) => void;
 }
 
 const sections: Section[] = [
-  { id: 'dashboard', title: 'Dashboard', badge: 'live', render: renderDashboard },
-  { id: 'library', title: 'Photo Library', badge: 'M2', render: renderLibrary },
-  { id: 'albums', title: 'Albums', badge: 'M2', render: renderAlbums },
-  { id: 'frames', title: 'Frames', badge: 'M2 registry', adminOnly: true, render: renderFrames },
-  { id: 'users', title: 'Users', badge: 'M2', adminOnly: true, render: renderUsers },
+  { id: 'dashboard', title: 'Dashboard', render: renderDashboard },
+  { id: 'library', title: 'Photo Library', render: renderLibrary },
+  { id: 'albums', title: 'Albums', render: renderAlbums },
+  { id: 'frames', title: 'Frames', adminOnly: true, render: renderFrames },
+  { id: 'users', title: 'Users', adminOnly: true, render: renderUsers },
   {
     id: 'audit',
     title: 'Audit log',
-    badge: 'M2',
     adminOnly: true,
     render: renderAudit,
   },
-  { id: 'releases', title: 'Releases', badge: 'M6', adminOnly: true, render: renderReleases },
+  { id: 'releases', title: 'Releases', adminOnly: true, render: renderReleases },
 ];
 
 // --- Login view ------------------------------------------------------------
@@ -190,7 +188,7 @@ function renderApp(root: HTMLElement, onUnauthed: () => void): void {
   const isAdmin = me?.role === 'admin';
   for (const s of sections) {
     if (s.adminOnly && !isAdmin) continue;
-    nav.append(h('a', { href: `#${s.id}` }, s.title, h('span', { class: 'badge' }, s.badge)));
+    nav.append(h('a', { href: `#${s.id}` }, s.title));
   }
 
   nav.addEventListener('click', (e) => {

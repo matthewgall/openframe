@@ -83,21 +83,6 @@ nav a[aria-current="page"] {
   font-weight: 600;
 }
 
-nav .badge {
-  margin-left: auto;
-  font-size: 0.7rem;
-  padding: 0.1rem 0.45rem;
-  border-radius: 999px;
-  background: var(--panel-2);
-  color: var(--text-dim);
-  border: 1px solid var(--border);
-}
-
-nav a[aria-current="page"] .badge {
-  background: rgba(255, 255, 255, 0.2);
-  color: #fff;
-  border-color: transparent;
-}
 
 main { flex: 1; padding: 1.5rem; overflow: auto; }
 
