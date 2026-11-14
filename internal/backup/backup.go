@@ -55,13 +55,14 @@ const (
 
 // Info is backup-info.json — what this backup is.
 type Info struct {
-	Kind      string   `json:"kind"` // server | frame
-	CreatedAt string   `json:"created_at"`
-	Version   string   `json:"version"`
-	Source    string   `json:"source"` // the data dir that was backed up
-	Files     int      `json:"files"`
-	Bytes     int64    `json:"bytes"`
-	Skipped   []string `json:"skipped,omitempty"` // files present but unreadable (e.g. root-owned update state from the frame user)
+	Kind        string   `json:"kind"` // server | frame
+	CreatedAt   string   `json:"created_at"`
+	Version     string   `json:"version"`
+	Source      string   `json:"source"` // the data dir that was backed up
+	Files       int      `json:"files"`
+	Bytes       int64    `json:"bytes"`
+	Skipped     []string `json:"skipped,omitempty"`      // files present but unreadable (e.g. root-owned update state from the frame user)
+	StorageNote string   `json:"storage_note,omitempty"` // set when photo objects live outside this backup (S3)
 }
 
 // ManifestFile is one data file in manifest.json.
@@ -230,11 +231,12 @@ func writeJSON(path string, v any) error {
 
 // ServerPaths is what a server backup needs.
 type ServerPaths struct {
-	Kind     string // KindServer
-	DataDir  string // recorded in Info.Source
-	DBPath   string // server SQLite
-	PhotoDir string // originals/ + derivatives/ root
-	Version  string
+	Kind        string // KindServer
+	DataDir     string // recorded in Info.Source
+	DBPath      string // server SQLite
+	PhotoDir    string // originals/ + derivatives/ root (local backend)
+	Version     string
+	StorageNote string // optional note recorded in Info (e.g. photos in S3)
 }
 
 // BackupServer snapshots the server database and copies the
@@ -268,12 +270,13 @@ func BackupServer(ctx context.Context, outDir string, p ServerPaths) (*Result, e
 		}
 	}
 	info := Info{
-		Kind:      KindServer,
-		CreatedAt: time.Now().UTC().Format(time.RFC3339),
-		Version:   p.Version,
-		Source:    p.DataDir,
-		Files:     len(c.manifest.Files),
-		Bytes:     c.bytes,
+		Kind:        KindServer,
+		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
+		Version:     p.Version,
+		Source:      p.DataDir,
+		Files:       len(c.manifest.Files),
+		Bytes:       c.bytes,
+		StorageNote: p.StorageNote,
 	}
 	if err := writeJSON(filepath.Join(outDir, manifestName), &c.manifest); err != nil {
 		return nil, err

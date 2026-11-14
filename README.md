@@ -28,6 +28,10 @@ complete against the specification:
 | 6 | Secure updater: A/B slots, signed releases, rollback, channels, staged rollout, admin releases | ✅ complete (hardware validation pending) |
 | 7 | Production hardening: backup/restore + recovery tests, security review, performance, production runbook, soak | ✅ complete (Pi hardware validation carried as the sole open item) |
 
+Since M7: **S3-compatible photo storage** (AWS S3, Cloudflare R2,
+MinIO, ...) — `server.photo_storage.backend: s3`, hand-rolled SigV4,
+no cloud SDK (ADR-0012). Local filesystem remains the default.
+
 See [docs/architecture/overview.md](docs/architecture/overview.md) for the
 system design and [docs/adr/](docs/adr/) for recorded decisions.
 
@@ -132,6 +136,16 @@ server:
   max_upload_files: 50             # per-request file cap
   max_decode_dimension: 8000       # px, reject larger images
   login_rate_limit_per_min: 5      # per-IP failed/at-all login attempts
+  photo_storage:                   # where photo bytes live (ADR-0012)
+    backend: local                 # local | s3 (default local)
+    s3:                            # S3-compatible: AWS S3, Cloudflare R2, MinIO, ...
+      endpoint: ""                 # empty = https://s3.<region>.amazonaws.com
+      region: us-east-1
+      bucket: family-photos
+      access_key_id: ""
+      secret_access_key: ""
+      path_style: false            # true for R2/MinIO; false for AWS S3
+      prefix: ""                   # optional key namespace inside the bucket
 frame:
   server_url: https://frame.example.com
   display:
@@ -181,8 +195,8 @@ Every key can be set via environment: the YAML path becomes an uppercased
 ├── server/
 │   ├── server.db             # server SQLite metadata
 │   └── photos/               # M2: content-addressed originals + derivatives
-│       ├── originals/<sha256>
-│       └── derivatives/<sha256>.<variant>
+│       ├── originals/<sha256>  # (with server.photo_storage.backend: s3 these
+│       └── derivatives/<sha256>.<variant>  # live in the bucket instead, ADR-0012)
 ├── frame/
 │   ├── frame.db              # frame SQLite (identity, state; M3: sync/cache;
 │   │                         #        M4: local settings; M5: server config summary)
@@ -262,8 +276,11 @@ openframe restore server --from /mnt/backups/server-... --yes
 
 Restore re-verifies before touching anything, preserves existing live
 data as `.pre-restore-*`, and leaves the backup intact for reuse. The
-frame side works the same way (`backup/restore frame`). Scheduling,
-off-host storage and the breach-rebuild runbook:
+frame side works the same way (`backup/restore frame`). With an S3
+photo backend (`server.photo_storage.backend: s3`) the backup snapshots
+the catalog, not the objects — the bucket is the object backup (the
+note is recorded in `backup-info.json`). Scheduling, off-host storage,
+the R2 setup guide and the breach-rebuild runbook:
 [docs/deployment/production.md](docs/deployment/production.md).
 
 Measured performance and the soak procedure:

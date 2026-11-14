@@ -87,7 +87,36 @@ than by the binary (the binary cannot know its own reverse proxy):
    beside the data; the runbook's cron example ships backups to a
    separate mount, and restore is tested (recovery tests, M7).
 
-## 7. Open items carried past M7
+## 7. S3-compatible photo storage (ADR-0012, post-M7)
+
+New surface, reviewed at implementation:
+
+- **Credentials**: the S3 access key is a long-lived secret. It is
+  never logged, never returned by any API, and only ever used to sign
+  requests to the configured `endpoint`. Config file permissions
+  (`0640 root:openframe`) or the env form keep it out of world reach;
+  the runbook's R2 section says to scope the token to one bucket with
+  write access only.
+- **Hand-rolled SigV4**: no third-party signer. Validated against the
+  official AWS `get-vanilla` vector plus a query-ordering vector
+  cross-verified against an independent implementation; the in-test S3
+  server re-checks the shape of every request (Authorization layout,
+  `X-Amz-Date`, payload hash == body hash). It signs only
+  PUT/GET/HEAD/LIST for the `s3` service — re-review if that grows.
+- **Transport**: all S3 traffic is HTTPS (operator-supplied
+  `endpoint`; an `http://` endpoint is the operator's explicit choice,
+  as with any self-hosted MinIO — the runbook examples are HTTPS).
+  The frame never talks to S3 directly; only the server does.
+- **Integrity**: uploads are content-addressed — the stored object's
+  key is its SHA-256, verified client-side before the PUT, so a
+  corrupted/truncated upload is rejected rather than stored under a
+  wrong key.
+- **Backup scope**: with S3 active the on-disk backup holds the
+  catalog, not the objects (recorded in `backup-info.json`'s
+  `storage_note`); the bucket is the object backup. This is an
+  explicit, documented scope, not an accident.
+
+## 8. Open items carried past M7
 
 - **Passkeys** for admin sign-in (T-05) — design is passkey-ready
   (session/credential stores are transport-agnostic); implementation

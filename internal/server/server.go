@@ -60,7 +60,21 @@ func New(cfg *config.Config, log *slog.Logger, dbh *sql.DB) (*Server, error) {
 		return nil, fmt.Errorf("server: nil db")
 	}
 
-	fs, err := storage.NewLocalFS(cfg.PhotoDir())
+	// Photo object storage: local filesystem (default) or S3-compatible
+	// (server.photo_storage.backend, ADR-0012).
+	var photoStorage storage.Storage
+	var err error
+	switch cfg.Server.PhotoStorage.Backend {
+	case "", "local":
+		photoStorage, err = storage.NewLocalFS(cfg.PhotoDir())
+	case "s3":
+		photoStorage, err = storage.NewS3(cfg.Server.PhotoStorage.S3, nil)
+		if err == nil {
+			log.Info("photo storage: s3", "bucket", cfg.Server.PhotoStorage.S3.Bucket, "endpoint", cfg.Server.PhotoStorage.S3.Endpoint)
+		}
+	default:
+		return nil, fmt.Errorf("server: photo storage backend %q not supported", cfg.Server.PhotoStorage.Backend)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("server: photo storage: %w", err)
 	}
@@ -78,7 +92,7 @@ func New(cfg *config.Config, log *slog.Logger, dbh *sql.DB) (*Server, error) {
 		Devices:      devices.NewStore(dbh),
 		Pairing:      pairing.NewStore(dbh),
 		Releases:     releases.NewStore(dbh, filepath.Join(serverDir, "releases")),
-		Storage:      fs,
+		Storage:      photoStorage,
 		Audit:        audit.NewRecorder(dbh, log),
 		LoginLimiter: auth.NewRateLimiter(time.Minute, 1024),
 		Pipeline:     photos.DefaultOptions(cfg.Server.MaxUploadBytes, cfg.Server.MaxDecodeDimension),

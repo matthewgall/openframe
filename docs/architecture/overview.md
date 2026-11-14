@@ -57,7 +57,8 @@ internal/server
 ├── pairing/         M5 pairing store: short codes (hash-only at rest), rate limits,
 │                    approval → device + one-time credential claim
 ├── manifest/        frame manifest builder (content revision + M5 config revision)
-├── storage/         Storage interface + content-addressed local FS backend (Range reads for resume)
+├── storage/         Storage interface + content-addressed local FS backend (Range reads
+│                    for resume) + S3-compatible backend (hand-rolled SigV4, ADR-0012)
 └── audit/           append-only audit recorder (JSON detail, no secrets)
 ```
 
@@ -170,8 +171,9 @@ threads.
 
 The API layer is the only HTTP-facing code; domain packages are plain
 stores over the shared `*sql.DB` and are individually testable against
-the real migrations. The storage backend is an interface so M7 can add
-an S3-compatible implementation without touching the API.
+the real migrations. The storage backend is an interface; S3-compatible
+backends (AWS S3, Cloudflare R2, MinIO, ...) were added without touching
+the API, upload pipeline or frame sync (ADR-0012).
 
 ## Offline-first invariants
 

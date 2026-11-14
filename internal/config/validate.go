@@ -39,6 +39,26 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("server.login_rate_limit_per_min must be in [1, 1000]")
 	}
 
+	switch c.Server.PhotoStorage.Backend {
+	case "", "local":
+	case "s3":
+		s := c.Server.PhotoStorage.S3
+		if s.Bucket == "" {
+			return fmt.Errorf("server.photo_storage.s3.bucket is required when backend is s3")
+		}
+		if s.Region == "" {
+			return fmt.Errorf("server.photo_storage.s3.region is required when backend is s3 (R2: \"auto\")")
+		}
+		if s.AccessKeyID == "" || s.SecretAccessKey == "" {
+			return fmt.Errorf("server.photo_storage.s3.access_key_id and secret_access_key are required when backend is s3 (settable via OPENFRAME_SERVER_PHOTO_STORAGE_S3_* env)")
+		}
+		if s.Prefix != "" && (strings.HasPrefix(s.Prefix, "/") || strings.HasSuffix(s.Prefix, "/")) {
+			return fmt.Errorf("server.photo_storage.s3.prefix must not start or end with '/'")
+		}
+	default:
+		return fmt.Errorf("server.photo_storage.backend %q is not supported (local|s3)", c.Server.PhotoStorage.Backend)
+	}
+
 	d := c.Frame.Display
 	if d.Driver != "headless" && d.Driver != "auto" && d.Driver != "drm" {
 		return fmt.Errorf("frame.display.driver %q is not supported in this release (headless|auto|drm)", d.Driver)

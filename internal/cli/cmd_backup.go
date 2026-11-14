@@ -77,12 +77,17 @@ func backupServer(args []string) int {
 	serverDir, _, _ := cfg.Paths()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
+	note := ""
+	if cfg.Server.PhotoStorage.Backend == "s3" {
+		note = fmt.Sprintf("photo objects live in S3 bucket %q and are NOT included in this backup (the bucket provides durability; see docs/deployment/production.md)", cfg.Server.PhotoStorage.S3.Bucket)
+	}
 	res, err := backup.BackupServer(ctx, *out, backup.ServerPaths{
-		Kind:     backup.KindServer,
-		DataDir:  cfg.DataDir,
-		DBPath:   filepath.Join(serverDir, "server.db"),
-		PhotoDir: cfg.PhotoDir(),
-		Version:  version.Version,
+		Kind:        backup.KindServer,
+		DataDir:     cfg.DataDir,
+		DBPath:      filepath.Join(serverDir, "server.db"),
+		PhotoDir:    cfg.PhotoDir(),
+		Version:     version.Version,
+		StorageNote: note,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "backup: %v\n", err)
@@ -90,6 +95,9 @@ func backupServer(args []string) int {
 	}
 	fmt.Printf("server backup complete: %s\n", res.Dir)
 	fmt.Printf("  files: %d (%s)\n", res.Files, humanBytes(res.Bytes))
+	if note != "" {
+		fmt.Printf("  note: %s\n", note)
+	}
 	fmt.Printf("  verify with: openframe backup verify --dir %s\n", res.Dir)
 	return ExitOK
 }

@@ -17,3 +17,4 @@ they are marked superseded with a pointer.
 | [ADR-0009](ADR-0009-image-support-v1.md) | v1 image support: JPEG/PNG/WebP; HEIC deferred | accepted |
 | [ADR-0010](ADR-0010-logging.md) | Structured logging: log/slog, JSON default | accepted |
 | [ADR-0011](ADR-0011-multi-arch-cross-compile.md) | Multi-architecture support via pure-Go cross-compilation | accepted |
+| [ADR-0012](ADR-0012-s3-storage.md) | S3-compatible photo storage with hand-rolled SigV4 (no cloud SDK) | accepted |

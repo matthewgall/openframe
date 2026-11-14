@@ -115,6 +115,9 @@ func runDoctor(args []string) int {
 	// 6. Frame database integrity (if present).
 	dbCheck(ctx, "frame database", filepath.Join(frameDir, "frame.db"), add)
 
+	// 6b. Photo object storage reachability (local dir / S3 bucket).
+	checkPhotoStorage(cfg, add)
+
 	// 7. Display detection (platform-split: the DRM backend is
 	//    Linux-only; other platforms report the headless fallback).
 	checkDisplay(add)

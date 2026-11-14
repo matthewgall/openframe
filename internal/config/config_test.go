@@ -153,7 +153,24 @@ func TestValidateRejects(t *testing.T) {
 		{"bad update policy", func(c *Config) { c.Frame.Update.Policy = "auto" }},
 		{"bad maintenance window", func(c *Config) { c.Frame.Update.MaintenanceWindow.End = "5:00" }},
 		{"negative quota", func(c *Config) { c.Frame.Storage.QuotaBytes = -1 }},
+		{"bad storage backend", func(c *Config) { c.Server.PhotoStorage.Backend = "azure" }},
+		{"s3 no bucket", func(c *Config) {
+			c.Server.PhotoStorage = PhotoStorageConfig{Backend: "s3", S3: S3Config{Region: "auto", AccessKeyID: "a", SecretAccessKey: "s"}}
+		}},
+		{"s3 no region", func(c *Config) {
+			c.Server.PhotoStorage = PhotoStorageConfig{Backend: "s3", S3: S3Config{Bucket: "b", AccessKeyID: "a", SecretAccessKey: "s"}}
+		}},
+		{"s3 no key", func(c *Config) {
+			c.Server.PhotoStorage = PhotoStorageConfig{Backend: "s3", S3: S3Config{Region: "auto", Bucket: "b", SecretAccessKey: "s"}}
+		}},
+		{"s3 no secret", func(c *Config) {
+			c.Server.PhotoStorage = PhotoStorageConfig{Backend: "s3", S3: S3Config{Region: "auto", Bucket: "b", AccessKeyID: "a"}}
+		}},
+		{"s3 prefix leading slash", func(c *Config) {
+			c.Server.PhotoStorage = PhotoStorageConfig{Backend: "s3", S3: S3Config{Region: "auto", Bucket: "b", AccessKeyID: "a", SecretAccessKey: "s", Prefix: "/p"}}
+		}},
 	}
+
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := Default()
@@ -162,6 +179,34 @@ func TestValidateRejects(t *testing.T) {
 				t.Errorf("expected validation error for %s", tc.name)
 			}
 		})
+	}
+}
+
+func TestPhotoStorageConfig(t *testing.T) {
+	// Default is local.
+	cfg := Default()
+	if cfg.Server.PhotoStorage.Backend != "local" {
+		t.Fatalf("default backend = %q, want local", cfg.Server.PhotoStorage.Backend)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("defaults should validate: %v", err)
+	}
+
+	// A complete S3 config validates.
+	cfg.Server.PhotoStorage = PhotoStorageConfig{
+		Backend: "s3",
+		S3: S3Config{
+			Endpoint:        "https://r2.cloudflarestorage.com",
+			Region:          "auto",
+			Bucket:          "family-photos",
+			AccessKeyID:     "AKIAEXAMPLE",
+			SecretAccessKey: "secret",
+			PathStyle:       true,
+			Prefix:          "openframe/production",
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid s3 config rejected: %v", err)
 	}
 }
 

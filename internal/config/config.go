@@ -57,6 +57,44 @@ type ServerConfig struct {
 	MaxUploadFiles       int           `yaml:"max_upload_files"`         // per request (default 50)
 	MaxDecodeDimension   int           `yaml:"max_decode_dimension"`     // px, decoded image cap (default 8000)
 	LoginRateLimitPerMin int           `yaml:"login_rate_limit_per_min"` // per IP (default 5)
+
+	// PhotoStorage selects the object backend for photo originals and
+	// derivatives (default "local": DataDir/server/photos).
+	PhotoStorage PhotoStorageConfig `yaml:"photo_storage"`
+}
+
+// PhotoStorageConfig selects and configures the photo object backend.
+type PhotoStorageConfig struct {
+	// Backend is "local" (default) or "s3" (S3-compatible: AWS S3,
+	// Cloudflare R2, MinIO, ...).
+	Backend string `yaml:"backend"`
+	// S3 is used only when Backend == "s3".
+	S3 S3Config `yaml:"s3"`
+}
+
+// S3Config configures the S3-compatible photo backend.
+//
+// Credentials may be given in the YAML or via environment
+// (OPENFRAME_SERVER_PHOTO_STORAGE_S3_ACCESS_KEY_ID / _SECRET_ACCESS_KEY);
+// env wins over the file. Keep them out of the config file in shared
+// deployments.
+type S3Config struct {
+	// Endpoint is the service root, e.g. "https://<acct>.r2.cloudflarestorage.com"
+	// (R2), "http://minio:9000", or "" for AWS S3 (a regional endpoint is
+	// derived from Region).
+	Endpoint string `yaml:"endpoint"`
+	// Region is the signing region. AWS: the bucket's region. R2: any
+	// non-empty value ("auto" is conventional).
+	Region string `yaml:"region"`
+	// Bucket is the target bucket. Required.
+	Bucket          string `yaml:"bucket"`
+	AccessKeyID     string `yaml:"access_key_id"`
+	SecretAccessKey string `yaml:"secret_access_key"`
+	// PathStyle uses <endpoint>/<bucket>/<key> URLs. Required for R2 and
+	// MinIO; leave false for AWS S3 (virtual-host style).
+	PathStyle bool `yaml:"path_style"`
+	// Prefix, when set, namespaces all object keys under "<prefix>/".
+	Prefix string `yaml:"prefix"`
 }
 
 // SecureURL reports whether PublicBaseURL is HTTPS (cookie Secure flag).
@@ -223,6 +261,7 @@ func Default() *Config {
 			MaxUploadFiles:       50,
 			MaxDecodeDimension:   8000,
 			LoginRateLimitPerMin: 5,
+			PhotoStorage:         PhotoStorageConfig{Backend: "local"},
 		},
 		Frame: FrameConfig{
 			Display: DisplayConfig{

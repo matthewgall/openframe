@@ -159,6 +159,14 @@ DIR/
 0600 credential, and the updater `state.json` when readable
 (root-owned; otherwise recorded as skipped).
 
+**S3-backed deployments**: when `server.photo_storage.backend: s3`,
+photo objects live in the bucket, not on the server disk, and the
+backup does **not** download them. `backup-info.json` records a
+`storage_note` saying so. The bucket (with its versioning/replication
+settings) is the object backup; the on-disk backup still covers the
+catalog, users, frames, pairs and release metadata — i.e. everything
+except the bytes themselves. See section 7.
+
 A backup is only "good" when `openframe backup verify --dir DIR`
 passes — it re-hashes every file and integrity-checks the database.
 `restore` runs the same verification before touching anything.
@@ -301,3 +309,81 @@ target has a hard deadline so a hung run fails loudly.
 | Check one frame's update state | `openframe update status` / `update check` |
 | Rotate a frame credential | admin UI → Frames → device → credential |
 | Audit trail | admin UI → Audit log (also `GET /api/v1/audit`) |
+| Check storage backend | `openframe doctor` (photo storage line) |
+
+## 7. Photo object storage: S3 / R2 (ADR-0012)
+
+The default backend is the local filesystem (`server.photo_storage.backend: local`,
+objects under `<data_dir>/server/photos`). For production, move photo
+bytes to an S3-compatible object store — strongly recommended for
+Cloudflare R2 (zero egress fees; the server reads objects constantly).
+
+### R2 setup
+
+1. Create a bucket (e.g. `family-photos`), pin it to a region
+   (e.g. `auto` / `hnd`).
+2. Create an API token (R2 → Manage R2 API Tokens) with **write**
+   access to that bucket only. Note the Account ID, Access Key ID
+   and Secret Access Key.
+3. Server config:
+
+   ```yaml
+   server:
+     photo_storage:
+       backend: s3
+       s3:
+         endpoint: https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+         region: auto
+         bucket: family-photos
+         access_key_id: <R2_ACCESS_KEY_ID>
+         secret_access_key: <R2_SECRET_ACCESS_KEY>
+         path_style: true   # R2 and MinIO require path-style
+   ```
+
+   Or via environment (keeps the secret out of the YAML):
+
+   ```sh
+   OPENFRAME_SERVER_PHOTO_STORAGE_BACKEND=s3
+   OPENFRAME_SERVER_PHOTO_STORAGE_S3_ENDPOINT=https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+   OPENFRAME_SERVER_PHOTO_STORAGE_S3_REGION=auto
+   OPENFRAME_SERVER_PHOTO_STORAGE_S3_BUCKET=family-photos
+   OPENFRAME_SERVER_PHOTO_STORAGE_S3_ACCESS_KEY_ID=...
+   OPENFRAME_SERVER_PHOTO_STORAGE_S3_SECRET_ACCESS_KEY=...
+   OPENFRAME_SERVER_PHOTO_STORAGE_S3_PATH_STYLE=true
+   ```
+
+   AWS S3: omit `endpoint` (the regional endpoint is derived from
+   `region`), leave `path_style: false` (virtual-host addressing).
+   MinIO / Garage / Ceph: point `endpoint` at the server, keep
+   `path_style: true`.
+
+4. Validate: `openframe doctor` — the **photo storage** line must
+   read `ok … s3: bucket … reachable`. Restart the service.
+
+### Operating notes
+
+- **Credentials at rest** (T-06): the access key in the config file —
+  keep the config `0640 root:openframe` (the service reads it as the
+  `openframe` user, not root-owned world-readable). Prefer the env
+  form above when you can (e.g. OpenRC `export` lines in the
+  init script are read by root before the exec, so the file stays
+  minimal).
+- **Migration from local to S3**: there is no automatic copy. The
+  content-addressed layout is the same on both sides — copy
+  `photos/originals/*` and `photos/derivatives/*` into the bucket
+  (same keys, `rclone` works with an S3 backend), then flip the
+  backend. The catalog (`server.db`) needs no changes: it stores
+  content hashes, not paths. Do it in a maintenance window; frames
+  re-derive from the manifest, so a brief mixed state is harmless.
+- **Multipart / large uploads**: not used. Uploads are capped by
+  `server.max_upload_bytes` (default 50 MiB) and sent as a single
+  PUT.
+- **Bucket hygiene** (operator policy, not application config):
+  private bucket, no public access; enable versioning or a lifecycle
+  rule if you want object-level history/tiers; the server needs
+  only `s3:PutObject`, `s3:GetObject`, `s3:HeadObject`,
+  `s3:ListBucketV2` on the bucket.
+- **Backups**: with S3 active, `openframe backup server` snapshots
+  the catalog but not the objects (recorded in `storage_note`).
+  Treat the bucket as the object backup; keep the catalog backup
+  off-box as usual.
