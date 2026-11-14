@@ -6,6 +6,61 @@ and the incident runbooks (T-06 breach/rebuild, T-10 restore).
 
 ## 1. Management server
 
+### Hardware sizing (measured, not theoretical)
+
+| Component | Requirement |
+|---|---|
+| RAM | **512 MB minimum** (256 MB works if you never upload large photos) |
+| CPU | 1 vCPU is fine; the 12 MP pipeline is single-request serial |
+| Disk | 1 GB minimum (DB + photos; see backups for growth) |
+
+Why 512 MB: the server idles at ~20–30 MB RSS, but a single 12 MP
+photo upload peaks at **~355 MB of allocations** in the derivative
+pipeline (M7 benchmarks, `docs/performance.md`). Anything less and
+the kernel's OOM killer — not your code — decides what dies.
+
+Lessons from a real 93 MB VPS attempt (2026-11-14):
+
+- A Go process could not even finish `exec` (reading the 14 MB
+  binary wedged in the block layer) and the OOM killer took it out
+  mid-initialisation. 93 MB is not a workable server box.
+- If you must run small: raise `vm.swappiness` (60), back RAM with
+  swap (zram preferred), and set `GOMEMLIMIT` in the service
+  environment to *below* total capacity (RAM+swap) so the GC
+  applies pressure before the kernel does. The 12 MP pipeline will
+  then thrash swap instead of being killed — slow, but alive.
+- Verify a box can run the binary at all before wiring up services:
+  `openframe version` should return in well under a second.
+
+### Non-systemd hosts (Alpine / OpenRC)
+
+The init contract is: run in foreground, write nothing to stdout but
+logs, handle SIGTERM with a graceful shutdown — all true. On OpenRC
+a foreground daemon needs `command_background=1` plus a pidfile, so
+use a wrapper that writes the pidfile then `exec`s the server (so the
+PID OpenRC tracks stays stable):
+
+```sh
+# /opt/openframe/run  (0755)
+#!/bin/sh
+echo $$ > /var/lib/openframe/openframe.pid
+exec /opt/openframe/openframe server --config /etc/openframe/server.yaml
+```
+
+```sh
+# /etc/init.d/openframe  (0755)  — then: rc-update add openframe default
+#!/sbin/openrc-run
+name=openframe
+command=/opt/openframe/run
+command_user=openframe
+command_background=1
+pidfile=/var/lib/openframe/openframe.pid
+environment="GOMEMLIMIT=400MiB"
+outputlog="/var/log/openframe.log"
+errorlog="/var/log/openframe.log"
+depend="net location"
+```
+
 ### Reverse proxy + TLS (threat model T-09)
 
 The server listens plain on its bind address and must be fronted by a
