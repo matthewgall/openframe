@@ -915,3 +915,22 @@ header .env { margin-left: 0; }
   .modal-actions .btn { width: 100%; }
   main { padding: 1.1rem; }
 }
+
+/* ---- Frame settings editor (Manage → Frame configuration) ---- */
+.config-group { margin: 0 0 1.2rem; }
+.config-group h4 {
+  margin: 0 0 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+input[type='range'].range {
+  min-height: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  accent-color: var(--accent);
+}
+.field.custom-sec { margin-top: 0.45rem; max-width: 14rem; }

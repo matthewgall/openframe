@@ -351,60 +351,125 @@ export function renderFrames(root: HTMLElement): void {
     return wrap;
   }
 
+  // presetSelect builds a "human label" interval selector: common
+  // presets with readable names, plus "Custom…" which reveals a
+  // seconds input. 0 = frame default (left unset).
+  function presetSelect(value: number, presets: Array<[number, string]>): {
+    el: HTMLDivElement;
+    get: () => number;
+  } {
+    const sel = h('select', { class: 'input' });
+    sel.append(h('option', { value: '0' }, 'Frame default'));
+    for (const [sec, label] of presets) sel.append(h('option', { value: String(sec) }, label));
+    sel.append(h('option', { value: '-1' }, 'Custom…'));
+    let init = '-1';
+    if (value === 0) init = '0';
+    else if (presets.some(([s]) => s === value)) init = String(value);
+    sel.value = init;
+
+    const customIn = h('input', { class: 'input', type: 'number', min: '2', max: '86400', value: value ? String(value) : '' });
+    const customAttrs: Record<string, string> = { class: 'field custom-sec' };
+    if (init === '-1') customAttrs.hidden = '';
+    const customWrap = h('div', customAttrs,
+      h('label', { class: 'muted' }, 'seconds (2–86400)'), customIn);
+    sel.addEventListener('change', () => {
+      if (sel.value === '-1') customWrap.removeAttribute('hidden');
+      else customWrap.setAttribute('hidden', '');
+    });
+    const el = h('div', {}, sel, customWrap);
+    const get = (): number => {
+      const v = parseInt(sel.value, 10);
+      if (v !== -1) return v;
+      const c = parseInt(customIn.value, 10);
+      return Number.isFinite(c) ? c : 0;
+    };
+    return { el, get };
+  }
+
   function configPanel(detail: DeviceDetail, done: () => void): HTMLElement {
     const wrap = h('div', { class: 'manage-section' });
     wrap.append(h('h3', {}, 'Frame configuration'),
-      h('div', { class: 'muted' }, 'Pushed to the frame with the manifest (version ' + detail.config.version + '). Unset fields fall back to the frame config file, then to the frame UI local settings.'));
+      h('div', { class: 'muted' }, 'Pushed to the frame with every sync (currently version ' + detail.config.version + '). "Frame default" means the frame uses its own setting — what you choose on its touchscreen wins.'));
     const c = detail.config.config;
 
-    const num = (label: string, value: number, min: number, max: number, hint: string): [HTMLDivElement, HTMLInputElement] => {
-      const inEl = h('input', { class: 'input', type: 'number', value: String(value || ''), min: String(min), max: String(max) });
-      const wrapEl = h('div', { class: 'field' }, h('label', {}, label + (hint ? ` (${hint})` : '')), inEl);
-      return [wrapEl, inEl];
+    const group = (title: string, ...items: HTMLElement[]): HTMLElement =>
+      h('div', { class: 'config-group' }, h('h4', {}, title), ...items);
+    const sel = (value: string, opts: Array<[string, string]>): HTMLSelectElement => {
+      const s = h('select', { class: 'input' });
+      for (const [v, label] of opts) s.append(h('option', { value: v }, label));
+      s.value = value;
+      return s;
     };
-    const intOf = (el: HTMLInputElement): number => {
-      const v = parseInt(el.value, 10);
-      return Number.isFinite(v) ? v : 0;
+
+    // --- Slideshow ---
+    const SLIDESHOW_PRESETS: Array<[number, string]> = [
+      [10, '10 seconds'], [30, '30 seconds'], [60, '1 minute'], [120, '2 minutes'],
+      [300, '5 minutes'], [600, '10 minutes'], [900, '15 minutes'],
+      [1800, '30 minutes'], [3600, '1 hour'],
+    ];
+    const interval = presetSelect(c.slideshow_interval_sec, SLIDESHOW_PRESETS);
+    const transSel = sel(c.transition || '', [
+      ['', 'Frame default'], ['none', 'None (hard cut)'],
+      ['crossfade', 'Crossfade (soft)'], ['slide', 'Slide (pan)'],
+    ]);
+    const briDefault = h('input', { class: 'input', type: 'checkbox' });
+    briDefault.checked = c.brightness == null;
+    const briRange = h('input', { class: 'input range', type: 'range', min: '0', max: '100', step: '1' });
+    briRange.value = String(c.brightness ?? 75);
+    const briVal = h('span', { class: 'muted', style: 'min-width:4rem;text-align:right' });
+    const briSync = (): void => {
+      briRange.disabled = briDefault.checked;
+      briVal.textContent = briDefault.checked ? 'frame default' : `${briRange.value}%`;
     };
+    briDefault.addEventListener('change', briSync);
+    briRange.addEventListener('input', briSync);
+    briSync();
+    const brightnessField = h('div', { class: 'field' },
+      h('label', {}, 'Brightness'),
+      h('div', { style: 'display:flex;align-items:center;gap:.6rem' }, briRange, briVal),
+      h('label', { class: 'check-label' }, briDefault, h('span', { class: 'muted' }, 'use the frame\u2019s own brightness')));
 
-    const [intWrap, intIn] = num('Slideshow interval (s, 0 = frame default)', c.slideshow_interval_sec, 0, 3600, '2–3600');
-    const [syncWrap, syncIn] = num('Sync poll interval (s, 0 = frame default)', c.sync_interval_sec, 0, 86400, '10–86400');
-    const [briWrap, briIn] = num('Brightness (0–100, empty = frame default)', c.brightness ?? 0, 0, 100, '');
+    // --- Sleep schedule ---
+    const sleepOff = h('input', { class: 'input', type: 'time', value: c.sleep_on || '' });
+    const sleepOn = h('input', { class: 'input', type: 'time', value: c.sleep_off || '' });
+    const sleepGroup = group('Sleep schedule',
+      h('div', { class: 'form-grid' },
+        field('Screen off (sleep)', sleepOff),
+        field('Screen on (wake)', sleepOn)),
+      h('div', { class: 'muted', style: 'margin-top:.4rem' }, 'Leave both blank to keep the frame\u2019s own schedule.'));
 
-    const optAttrs = (v: string, cur: string): Record<string, string> => {
-      const a: Record<string, string> = { value: v };
-      if (v === cur) a.selected = '';
-      return a;
-    };
-    const transSel = h('select', { class: 'input' },
-      ...['', 'none', 'crossfade', 'slide'].map((v) =>
-        h('option', optAttrs(v, c.transition || ''), v === '' ? '(frame default)' : v)));
-    const oriSel = h('select', { class: 'input' },
-      ...['', 'normal', 'rotate90', 'rotate180', 'rotate270'].map((v) =>
-        h('option', optAttrs(v, c.orientation || ''), v === '' ? '(frame default)' : v)));
-    const chanSel = h('select', { class: 'input' },
-      ...['', 'stable', 'beta', 'development'].map((v) =>
-        h('option', optAttrs(v, c.update_channel || ''), v === '' ? '(default: stable)' : v)));
-
-    const sleepOn = h('input', { class: 'input', type: 'time', value: c.sleep_on || '' });
-    const sleepOff = h('input', { class: 'input', type: 'time', value: c.sleep_off || '' });
-
+    // --- Display ---
+    const oriSel = sel(c.orientation || '', [
+      ['', 'Frame default'], ['normal', 'Normal'], ['rotate90', '90° clockwise'],
+      ['rotate180', '180° (upside-down)'], ['rotate270', '270° clockwise'],
+    ]);
     const clockBox = h('input', { class: 'input', type: 'checkbox', value: '1' });
     if (c.show_clock === true) clockBox.checked = true;
     const capBox = h('input', { class: 'input', type: 'checkbox', value: '1' });
     if (c.show_captions === true) capBox.checked = true;
 
+    // --- Maintenance ---
+    const SYNC_PRESETS: Array<[number, string]> = [
+      [30, '30 seconds'], [60, '1 minute'], [300, '5 minutes'],
+      [900, '15 minutes'], [1800, '30 minutes'], [3600, '1 hour'],
+    ];
+    const syncPoll = presetSelect(c.sync_interval_sec, SYNC_PRESETS);
+    const chanSel = sel(c.update_channel || '', [
+      ['', 'Frame default (stable)'], ['stable', 'Stable'],
+      ['beta', 'Beta'], ['development', 'Development (first to get updates)'],
+    ]);
+
     const errEl = h('div', { class: 'muted' });
     const save = h('button', { class: 'btn primary', type: 'button' }, 'Save configuration');
     save.addEventListener('click', async () => {
       const cfg: FrameConfig = {
-        slideshow_interval_sec: intOf(intIn),
+        slideshow_interval_sec: interval.get(),
         transition: transSel.value,
         transition_duration_ms: c.transition_duration_ms,
-        sync_interval_sec: intOf(syncIn),
-        sleep_on: sleepOn.value,
-        sleep_off: sleepOff.value,
-        brightness: briIn.value === '' ? null : intOf(briIn),
+        sync_interval_sec: syncPoll.get(),
+        sleep_on: sleepOff.value,
+        sleep_off: sleepOn.value,
+        brightness: briDefault.checked ? null : parseInt(briRange.value, 10),
         orientation: oriSel.value,
         show_clock: triState(c.show_clock, clockBox.checked),
         show_captions: triState(c.show_captions, capBox.checked),
@@ -420,18 +485,21 @@ export function renderFrames(root: HTMLElement): void {
     });
 
     wrap.append(
-      h('div', { class: 'form-grid' },
-        intWrap,
-        syncWrap,
-        briWrap,
-        field('Transition', transSel),
-        field('Orientation', oriSel),
-        field('Sleep on', sleepOn),
-        field('Sleep off', sleepOff),
-        field('Show clock', checkboxRow(clockBox, 'on / off (empty checkbox = frame default)')),
-        field('Show captions', checkboxRow(capBox, 'on / off (empty checkbox = frame default)')),
-        field('Update channel (M6)', chanSel),
-      ),
+      group('Slideshow',
+        h('div', { class: 'form-grid' },
+          field('Photo interval', interval.el),
+          field('Transition', transSel)),
+        brightnessField),
+      sleepGroup,
+      group('Display',
+        h('div', { class: 'form-grid' },
+          field('Screen orientation', oriSel),
+          field('Clock', checkboxRow(clockBox, 'show the clock, top right'))),
+        field('Captions', checkboxRow(capBox, 'show the photograph\u2019s caption'))),
+      group('Maintenance',
+        h('div', { class: 'form-grid' },
+          field('Sync poll', syncPoll.el),
+          field('Update channel', chanSel))),
       errEl,
       h('div', { class: 'modal-actions' }, save),
     );
