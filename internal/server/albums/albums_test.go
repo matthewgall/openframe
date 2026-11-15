@@ -195,3 +195,44 @@ func TestDeviceAssignment(t *testing.T) {
 		t.Fatalf("unassign: %v", devs)
 	}
 }
+
+func TestUnassignDeviceFromAll(t *testing.T) {
+	s, uid := newTest(t)
+	ctx := context.Background()
+	a1, err := s.Create(ctx, "A1", "", true, uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a2, err := s.Create(ctx, "A2", "", true, uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const dev = "dev-unassign-all"
+	if _, err := s.dbh.ExecContext(ctx,
+		`INSERT INTO devices (id, name, created_at) VALUES (?, 'Pi 3B+', '2026-01-01T00:00:00Z')`, dev); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AssignDevice(ctx, a1.ID, dev); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AssignDevice(ctx, a2.ID, dev); err != nil {
+		t.Fatal(err)
+	}
+	n, err := s.UnassignDeviceFromAll(ctx, dev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("removed = %d, want 2", n)
+	}
+	for _, a := range []*Album{a1, a2} {
+		devs, err := s.Devices(ctx, a.ID)
+		if err != nil || len(devs) != 0 {
+			t.Fatalf("album %s still assigned: %v %v", a.Name, devs, err)
+		}
+	}
+	// A device with no assignments is a no-op, not an error.
+	if n, err := s.UnassignDeviceFromAll(ctx, dev); err != nil || n != 0 {
+		t.Fatalf("second call: n=%d err=%v, want 0/nil", n, err)
+	}
+}

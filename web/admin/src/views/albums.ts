@@ -312,11 +312,21 @@ function openAlbumDetail(
         }
         clear(devSel);
         clear(unSel);
+        let active = 0;
         for (const d of devices) {
-          devSel.append(h('option', { value: d.id }, d.name + (d.revoked_at ? ' (revoked)' : '')));
+          // Revocation is terminal (a revoked frame can never receive
+          // a credential again), so it is never offered for assignment
+          // — and the server strips any stale assignment on revoke.
+          if (d.revoked_at) continue;
+          active++;
+          devSel.append(h('option', { value: d.id }, d.name));
           if (assigned.includes(d.id)) {
             unSel.append(h('option', { value: d.id }, d.name));
           }
+        }
+        if (active === 0) {
+          devSel.append(h('option', {}, 'No active frames'));
+          devSel.disabled = true;
         }
       }
     } catch (e) {

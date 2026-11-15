@@ -163,8 +163,15 @@ func (s *Server) handleRevokeDevice(w http.ResponseWriter, r *http.Request) {
 		s.writeDomainError(w, err)
 		return
 	}
-	s.audit(r, "device.revoked", "device", id, nil)
-	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
+	// Revocation is terminal (no further credentials can be issued),
+	// so strip the device from every album: a dead frame must not
+	// keep claiming a collection in the assignment UI.
+	unassigned, err := s.albumStore.UnassignDeviceFromAll(r.Context(), id)
+	if err != nil {
+		s.log.Error("revoke: unassign failed", "device", id, "error", err)
+	}
+	s.audit(r, "device.revoked", "device", id, map[string]any{"unassigned_from_albums": unassigned})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "revoked", "unassigned_from_albums": unassigned})
 }
 
 // handleAudit: GET /api/v1/audit?limit=&offset= (admin).

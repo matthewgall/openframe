@@ -293,6 +293,19 @@ func (s *Store) AssignDevice(ctx context.Context, albumID, deviceID string) erro
 	return nil
 }
 
+// UnassignDeviceFromAll removes the device from every album and
+// returns how many assignments were removed. Revocation is terminal
+// for a device (it can never be issued credentials again), so a
+// revoked frame must not keep claiming albums in the assignment UI.
+func (s *Store) UnassignDeviceFromAll(ctx context.Context, deviceID string) (int64, error) {
+	res, err := s.dbh.ExecContext(ctx,
+		"DELETE FROM album_devices WHERE device_id = ?", deviceID)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 func (s *Store) UnassignDevice(ctx context.Context, albumID, deviceID string) error {
 	_, err := s.dbh.ExecContext(ctx,
 		`DELETE FROM album_devices WHERE album_id = ? AND device_id = ?`, albumID, deviceID)
