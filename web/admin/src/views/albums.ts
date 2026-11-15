@@ -236,7 +236,7 @@ function openAlbumDetail(
   const load = async (): Promise<void> => {
     try {
       const detail = await getAlbum(a.id);
-      const photos = detail.photos;
+      const photos = detail.photos ?? [];
 
       clear(photosWrap);
       if (photos.length === 0) {
@@ -287,7 +287,10 @@ function openAlbumDetail(
         clear(picker);
         const options = all.filter((p) => !photos.includes(p.id));
         if (options.length === 0) {
-          picker.append(h('option', {}, 'All photographs are in this album'));
+          const msg = all.length === 0
+            ? 'No photographs in the library yet — upload some first'
+            : 'All photographs are in this album';
+          picker.append(h('option', {}, msg));
           picker.disabled = true;
         }
         for (const p of options) {
@@ -299,7 +302,7 @@ function openAlbumDetail(
       if (isAdmin) {
         const { devices } = await listDevices();
         clear(framesList);
-        const assigned = detail.devices;
+        const assigned = detail.devices ?? [];
         if (assigned.length === 0) {
           framesList.append(h('div', { class: 'muted' }, 'Not assigned to any frame yet.'));
         }

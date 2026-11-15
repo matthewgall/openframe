@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"reflect"
 	"strings"
 
 	"github.com/matthewgall/openframe/internal/server/albums"
@@ -32,7 +33,89 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	json.NewEncoder(w).Encode(normalizeNilCollections(v))
+}
+
+// normalizeNilCollections replaces nil slices and maps with empty
+// collections before encoding. A JSON null list field is a landmine
+// for every consumer ("photos": null crashed the Deleted view, the
+// album modal, …) — in this API a collection means "possibly empty",
+// never "absent". It walks structs, maps and slices via reflection so
+// every response shape is covered. Two kinds of value are opaque and
+// pass through untouched: byte-string slices ([]byte, json.RawMessage
+// — JSON encodes them base64 or verbatim, never as lists; latestResponse
+// carries signed metadata that must survive byte-for-byte) and structs
+// with no exported fields (time.Time — copying would zero them).
+// Nil pointers (nullable objects such as deactivated_at) are likewise
+// untouched: null is the right encoding for a missing value there.
+func normalizeNilCollections(v any) any {
+	rv := reflect.ValueOf(v)
+	// Pointer layer: nil stays null (nullable object). A non-nil
+	// pointer is normalised THROUGH the pointee and re-wrapped in a
+	// fresh pointer of the same type — returning the bare pointee
+	// would make a parent field Set assign, e.g., an int into an *int
+	// field (manifest.Config.Brightness) and panic.
+	if rv.Kind() == reflect.Ptr {
+		if rv.IsNil() {
+			return v
+		}
+		ptrType := rv.Type()
+		normalized := normalizeNilCollections(rv.Elem().Interface())
+		p := reflect.New(ptrType.Elem())
+		p.Elem().Set(reflect.ValueOf(normalized))
+		return p.Interface()
+	}
+	switch rv.Kind() {
+	case reflect.Map:
+		if rv.IsNil() {
+			return reflect.MakeMap(rv.Type()).Interface()
+		}
+		out := reflect.MakeMap(rv.Type())
+		for iter := rv.MapRange(); iter.Next(); {
+			out.SetMapIndex(iter.Key(),
+				reflect.ValueOf(normalizeNilCollections(iter.Value().Interface())))
+		}
+		return out.Interface()
+	case reflect.Slice:
+		if rv.IsNil() {
+			// MakeSlice, NOT reflect.New(...).Elem(): the zero value of
+			// a slice is nil, which would serialise back to null.
+			return reflect.MakeSlice(rv.Type(), 0, 0).Interface()
+		}
+		if rv.Type().Elem().Kind() == reflect.Uint8 {
+			return v // byte string, not a list (see comment above)
+		}
+		// MakeSlice of the SAME type: a parent struct field Set would
+		// panic if []manifest.Photo came back as []any.
+		out := reflect.MakeSlice(rv.Type(), rv.Len(), rv.Len())
+		for i := 0; i < rv.Len(); i++ {
+			out.Index(i).Set(reflect.ValueOf(normalizeNilCollections(rv.Index(i).Interface())))
+		}
+		return out.Interface()
+	case reflect.Struct:
+		// Opaque structs (time.Time, …) have no exported fields and
+		// must pass through untouched — copying one would zero it.
+		hasExported := false
+		for i := 0; i < rv.NumField(); i++ {
+			if rv.Type().Field(i).PkgPath == "" {
+				hasExported = true
+				break
+			}
+		}
+		if !hasExported {
+			return v
+		}
+		out := reflect.New(rv.Type()).Elem()
+		for i := 0; i < rv.NumField(); i++ {
+			if rv.Type().Field(i).PkgPath != "" {
+				continue // unexported: not serialized either
+			}
+			out.Field(i).Set(reflect.ValueOf(normalizeNilCollections(rv.Field(i).Interface())))
+		}
+		return out.Interface()
+	default:
+		return v
+	}
 }
 
 // isBodyTooLarge reports whether the error came from an http.MaxBytes
