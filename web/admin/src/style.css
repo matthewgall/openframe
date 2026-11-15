@@ -387,6 +387,17 @@ header .env { margin-left: 0; }
   font-variant-numeric: tabular-nums;
 }
 
+/* Secondary line under a stat value (e.g. “2 in trash”, “1 revoked”).
+   Kept quiet so the headline number stays the glance target. */
+.stat-sub {
+  margin-top: 0.2rem;
+  font-size: 0.8rem;
+  color: var(--text-faint);
+}
+.stat-sub[hidden] {
+  display: none;
+}
+
 /* ---- Photo grid ----------------------------------------------------------------- */
 
 .photo-grid {

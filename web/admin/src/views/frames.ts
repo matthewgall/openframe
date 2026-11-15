@@ -39,7 +39,17 @@ export function renderFrames(root: HTMLElement): void {
   const toolbar = h('div', { class: 'toolbar' });
   const newBtn = h('button', { class: 'btn primary', type: 'button' }, 'Register device');
   const refreshBtn = h('button', { class: 'btn ghost', type: 'button' }, 'Refresh');
-  toolbar.append(newBtn, refreshBtn);
+  // Revoked frames are terminal (no further credentials possible); they
+  // hide by default so the page answers "what is my fleet", with the
+  // toggle to audit the retired ones.
+  let showRevoked = false;
+  const showRevokedBtn = h('button', { class: 'btn ghost', type: 'button' }, 'Show revoked');
+  showRevokedBtn.addEventListener('click', () => {
+    showRevoked = !showRevoked;
+    showRevokedBtn.classList.toggle('active', showRevoked);
+    void render();
+  });
+  toolbar.append(newBtn, refreshBtn, showRevokedBtn);
   root.append(toolbar);
 
   const pairingWrap = h('div', { class: 'card', style: 'margin-top:1rem' });
@@ -63,6 +73,17 @@ export function renderFrames(root: HTMLElement): void {
         );
         return;
       }
+      const visible = showRevoked ? devices : devices.filter((d) => !d.revoked_at);
+      if (visible.length === 0) {
+        devicesWrap.append(
+          emptyState({
+            icon: 'frame',
+            title: 'No active frames',
+            body: `${devices.length} frame(s) are revoked (terminal — they can never sync again). Use “Show revoked” to see them.`,
+          }),
+        );
+        return;
+      }
       const table = h('table', { class: 'table' });
       const thead = h('thead');
       thead.append(h('tr', {},
@@ -76,7 +97,7 @@ export function renderFrames(root: HTMLElement): void {
         h('th', {}, ''),
       ));
       const tbody = h('tbody');
-      for (const d of devices) tbody.append(deviceRow(d, render));
+      for (const d of visible) tbody.append(deviceRow(d, render));
       table.append(thead, tbody);
       devicesWrap.append(table);
     } catch (err) {

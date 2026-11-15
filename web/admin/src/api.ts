@@ -168,7 +168,7 @@ export interface Stats {
   photos: { total: number; deleted: number; storage_bytes: number; recent: Photo[] & { name?: string }[] };
   albums: { total: number; shared: number };
   users: { active: number };
-  devices: { total: number };
+  devices: { total: number; revoked: number };
   server: { version: string; hostname: string };
 }
 

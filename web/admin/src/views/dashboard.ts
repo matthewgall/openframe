@@ -12,12 +12,11 @@ export function renderDashboard(root: HTMLElement): void {
   ];
   const cardEls = cards.map(([label]) => {
     const c = h('div', { class: 'card stat' });
-    c.append(
-      h('h2', {}, label),
-      h('div', { class: 'stat-value' }, '—'),
-    );
+    const value = h('div', { class: 'stat-value' }, '—');
+    const sub = h('div', { class: 'stat-sub', hidden: '' });
+    c.append(h('h2', {}, label), value, sub);
     statsGrid.append(c);
-    return c.querySelector('.stat-value')!;
+    return { value, sub };
   });
 
   root.append(statsGrid);
@@ -44,23 +43,34 @@ export function renderDashboard(root: HTMLElement): void {
     try {
       const [stats, health, dev] = await Promise.all([getStats(), getHealth(), listDevices().catch(() => null)]);
       const s = stats as Stats;
-      cardEls[0].textContent = String(s.photos.total);
-      cardEls[1].textContent = formatBytes(s.photos.storage_bytes);
-      cardEls[2].textContent = `${s.albums.total} (${s.albums.shared} shared)`;
-      cardEls[3].textContent = String(s.users.active);
-      cardEls[4].textContent = String(s.devices.total);
+      // Headline numbers are LIVE resources; trash/revoked counts are
+      // sub-lines so a glance answers "what works right now".
+      cardEls[0].value.textContent = String(s.photos.total);
+      cardEls[0].sub.textContent = s.photos.deleted > 0 ? `${s.photos.deleted} in trash` : '';
+      cardEls[0].sub.hidden = s.photos.deleted === 0;
+      cardEls[1].value.textContent = formatBytes(s.photos.storage_bytes);
+      cardEls[2].value.textContent = `${s.albums.total} (${s.albums.shared} shared)`;
+      cardEls[3].value.textContent = String(s.users.active);
+      cardEls[4].value.textContent = String(s.devices.total);
+      cardEls[4].sub.textContent = (s.devices.revoked ?? 0) > 0 ? `${s.devices.revoked} revoked` : '';
+      cardEls[4].sub.hidden = (s.devices.revoked ?? 0) === 0;
 
       clear(framesKv);
       if (dev) {
+        const active = dev.devices.filter((d) => !d.revoked_at);
         const counts = new Map<DeviceStatus, number>();
-        for (const d of dev.devices) counts.set(d.status, (counts.get(d.status) ?? 0) + 1);
-        if (dev.devices.length === 0) {
+        for (const d of active) counts.set(d.status, (counts.get(d.status) ?? 0) + 1);
+        if (active.length === 0) {
           kvRow(framesKv, 'Registered', '0 — pair your first frame (Frames → Pending pairing)');
         } else {
           const order: DeviceStatus[] = ['online', 'sync_error', 'updating', 'update_failed', 'rollback', 'recently_seen', 'offline'];
           const parts = order.filter((k) => counts.get(k)).map((k) => `${counts.get(k)} ${k.replace('_', ' ')}`);
           kvRow(framesKv, 'Status', parts.join(' · '));
-          kvRow(framesKv, 'Total', String(dev.devices.length));
+          kvRow(framesKv, 'Total', String(active.length));
+        }
+        const revokedN = dev.devices.length - active.length;
+        if (revokedN > 0) {
+          kvRow(framesKv, 'Revoked', `${revokedN} (hidden on the Frames page by default)`);
         }
       }
 

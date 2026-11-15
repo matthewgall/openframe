@@ -12,7 +12,7 @@ import (
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	var photosTotal, photosDeleted, albumsTotal, albumsShared, usersTotal, devicesTotal int
+	var photosTotal, photosDeleted, albumsTotal, albumsShared, usersTotal, devicesTotal, devicesRevoked int
 	scanCount := func(table, where string) int {
 		q := `SELECT COUNT(*) FROM ` + table
 		if where != "" {
@@ -24,12 +24,16 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		}
 		return n
 	}
-	photosTotal = scanCount("photos", "")
+	// Headline counts are LIVE resources: photos in the trash and
+	// revoked (terminal) devices are reported separately, not mixed
+	// into the totals a glance at the dashboard should answer.
+	photosTotal = scanCount("photos", "deleted_at IS NULL")
 	photosDeleted = scanCount("photos", "deleted_at IS NOT NULL")
 	albumsTotal = scanCount("albums", "deleted_at IS NULL")
 	albumsShared = scanCount("albums", "deleted_at IS NULL AND is_shared = 1")
 	usersTotal = scanCount("users", "deactivated_at IS NULL")
-	devicesTotal = scanCount("devices", "")
+	devicesTotal = scanCount("devices", "revoked_at IS NULL OR revoked_at = ''")
+	devicesRevoked = scanCount("devices", "revoked_at IS NOT NULL AND revoked_at != ''")
 
 	var storageBytes int64
 	_ = s.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(size_bytes), 0) FROM photos WHERE deleted_at IS NULL`).Scan(&storageBytes)
@@ -76,7 +80,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		},
 		"albums":  map[string]any{"total": albumsTotal, "shared": albumsShared},
 		"users":   map[string]any{"active": usersTotal},
-		"devices": map[string]any{"total": devicesTotal},
+		"devices": map[string]any{"total": devicesTotal, "revoked": devicesRevoked},
 		"server": map[string]any{
 			"version":  version.Version,
 			"hostname": hostname,
