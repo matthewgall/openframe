@@ -16,7 +16,7 @@ import {
   updateAlbum,
   type Album,
 } from '../api';
-import { banner, clear, confirmAction, formatDateTime, h, openModal } from '../components';
+import { banner, clear, confirmAction, emptyState, formatDateTime, h, openModal } from '../components';
 
 export function renderAlbums(root: HTMLElement): void {
   const toolbar = h('div', { class: 'toolbar' });
@@ -29,12 +29,19 @@ export function renderAlbums(root: HTMLElement): void {
 
   const render = async (): Promise<void> => {
     clear(grid);
-    grid.append(h('div', { class: 'muted' }, 'Loading…'));
+    grid.append(h('div', { class: 'loading' }, 'Loading…'));
     try {
       const { albums } = await listAlbums();
       clear(grid);
       if (albums.length === 0) {
-        grid.append(h('div', { class: 'muted' }, 'No albums yet.'));
+        grid.append(
+          emptyState({
+            icon: 'album',
+            title: 'No albums yet',
+            body: 'Group photographs into albums, then assign albums to your frames.',
+            action: { label: 'New album', onClick: startCreateAlbum },
+          }),
+        );
         return;
       }
       for (const a of albums) grid.append(albumCard(a, render));
@@ -44,7 +51,7 @@ export function renderAlbums(root: HTMLElement): void {
     }
   };
 
-  newBtn.addEventListener('click', () => {
+  const startCreateAlbum = (): void => {
     const m = openModal('New album');
     const name = h('input', { class: 'input', type: 'text', placeholder: 'Album name' });
     const desc = h('input', { class: 'input', type: 'text', placeholder: 'Description (optional)' });
@@ -72,7 +79,9 @@ export function renderAlbums(root: HTMLElement): void {
       h('div', { class: 'modal-actions' }, save),
     );
     name.focus();
-  });
+  };
+
+  newBtn.addEventListener('click', startCreateAlbum);
 
   void render();
 
@@ -231,7 +240,16 @@ function openAlbumDetail(
 
       clear(photosWrap);
       if (photos.length === 0) {
-        photosWrap.append(h('div', { class: 'muted' }, 'No photographs in this album.'));
+        photosWrap.append(
+          emptyState({
+            icon: 'photo',
+            compact: true,
+            title: 'No photographs in this album yet',
+            body: canManage
+              ? 'Use the picker below to add photographs from the library.'
+              : 'Photographs added to this album by its owner will appear here.',
+          }),
+        );
       }
       for (const pid of photos) {
         const row = h('div', { class: 'album-photo-row' });

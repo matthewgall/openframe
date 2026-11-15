@@ -9,7 +9,7 @@ import {
   type ReleasePlatform,
   type ReleaseStatus,
 } from '../api';
-import { banner, clear, confirmAction, formatBytes, formatDateTime, h, openModal } from '../components';
+import { banner, clear, confirmAction, emptyState, formatBytes, formatDateTime, h, openModal } from '../components';
 
 // Releases view (M6, spec §14, ADR-0007): upload signed releases,
 // approve/pause serving, expand staged rollouts, and delete. The
@@ -131,7 +131,13 @@ export function renderReleases(root: HTMLElement): void {
       return;
     }
     if (releases.length === 0) {
-      tableWrap.append(h('div', { class: 'muted' }, 'No releases uploaded yet. Upload a signed release above.'));
+      tableWrap.append(
+        emptyState({
+          icon: 'package',
+          title: 'No releases uploaded',
+          body: 'Upload a signed release above to push updates to your frames.',
+        }),
+      );
       return;
     }
     const table = h('table', { class: 'table' });

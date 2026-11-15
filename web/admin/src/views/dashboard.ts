@@ -1,5 +1,5 @@
 import { getHealth, getStats, listDevices, photoFileURL, type DeviceStatus, type Stats } from '../api';
-import { clear, formatBytes, formatDateTime, h, kvRow } from '../components';
+import { clear, emptyState, formatBytes, formatDateTime, h, kvRow } from '../components';
 
 export function renderDashboard(root: HTMLElement): void {
   const statsGrid = h('div', { class: 'stat-grid' });
@@ -72,7 +72,14 @@ export function renderDashboard(root: HTMLElement): void {
         uploaded_at: string;
       }>;
       if (recent.length === 0) {
-        recentGrid.append(h('div', { class: 'muted' }, 'No photographs yet.'));
+        recentGrid.append(
+          emptyState({
+            icon: 'photo',
+            compact: true,
+            title: 'No photographs yet',
+            body: 'Recent uploads appear here.',
+          }),
+        );
       }
       for (const p of recent) {
         const item = h('figure', { class: 'photo-tile' });

@@ -18,7 +18,7 @@ import {
   type FrameConfig,
   type PairingChallenge,
 } from '../api';
-import { banner, clear, confirmAction, formatBytes, formatDateTime, h, kvRow, openModal, revealSecret } from '../components';
+import { banner, clear, confirmAction, emptyState, formatBytes, formatDateTime, h, kvRow, openModal, revealSecret } from '../components';
 
 // statusMeta maps the server-derived device status to a pill class and
 // label (spec §13: the UI must distinguish these states).
@@ -54,7 +54,13 @@ export function renderFrames(root: HTMLElement): void {
       const { devices } = await listDevices();
       clear(devicesWrap);
       if (devices.length === 0) {
-        devicesWrap.append(h('div', { class: 'muted' }, 'No devices registered. A new frame appears under "Pending pairing" when it starts up.'));
+        devicesWrap.append(
+          emptyState({
+            icon: 'frame',
+            title: 'No frames yet',
+            body: 'When a new frame starts up it appears under “Pending pairing” — approve it with the code shown on its screen.',
+          }),
+        );
         return;
       }
       const table = h('table', { class: 'table' });

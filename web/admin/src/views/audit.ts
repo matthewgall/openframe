@@ -1,5 +1,5 @@
 import { listAudit } from '../api';
-import { clear, formatDateTime, h } from '../components';
+import { clear, emptyState, formatDateTime, h } from '../components';
 
 export function renderAudit(root: HTMLElement): void {
   const toolbar = h('div', { class: 'toolbar' });
@@ -16,7 +16,13 @@ export function renderAudit(root: HTMLElement): void {
       const { entries } = await listAudit(200);
       clear(wrap);
       if (entries.length === 0) {
-        wrap.append(h('div', { class: 'muted' }, 'No audit entries yet.'));
+        wrap.append(
+          emptyState({
+            icon: 'list',
+            title: 'No audit entries yet',
+            body: 'Sign-ins, uploads, pairing and configuration changes are recorded here.',
+          }),
+        );
         return;
       }
       const table = h('table', { class: 'table' });

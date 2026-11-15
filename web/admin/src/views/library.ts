@@ -8,7 +8,7 @@ import {
   uploadPhotos,
   type Photo,
 } from '../api';
-import { banner, clear, confirmAction, formatBytes, formatDateTime, h, openModal, pickFiles } from '../components';
+import { banner, clear, confirmAction, emptyState, formatBytes, formatDateTime, h, openModal, pickFiles } from '../components';
 
 const PAGE = 60;
 
@@ -48,9 +48,14 @@ export function renderLibrary(root: HTMLElement): void {
   let deletedView = false;
   let searchTimer: number | undefined;
 
+  const startUpload = async (): Promise<void> => {
+    const files = await pickFiles('image/jpeg,image/png,image/webp', true);
+    await doUpload(files);
+  };
+
   const render = async (): Promise<void> => {
     clear(grid);
-    grid.append(h('div', { class: 'muted' }, 'Loading…'));
+    grid.append(h('div', { class: 'loading' }, 'Loading…'));
     try {
       const { photos, total } = await listPhotos({
         search: search.value.trim() || undefined,
@@ -62,7 +67,33 @@ export function renderLibrary(root: HTMLElement): void {
         ? `${total} deleted photograph${total === 1 ? '' : 's'}`
         : `${total} photograph${total === 1 ? '' : 's'}`;
       if (photos.length === 0) {
-        grid.append(h('div', { class: 'muted' }, deletedView ? 'Nothing in the trash.' : 'No photographs yet — upload some above.'));
+        const q = search.value.trim();
+        if (deletedView) {
+          grid.append(
+            emptyState({
+              icon: 'trash',
+              title: 'Nothing in the trash',
+              body: 'Deleted photographs stay here until you restore them.',
+            }),
+          );
+        } else if (q) {
+          grid.append(
+            emptyState({
+              icon: 'search',
+              title: 'No matches',
+              body: `No photographs match “${q}”.`,
+            }),
+          );
+        } else {
+          grid.append(
+            emptyState({
+              icon: 'photo',
+              title: 'No photographs yet',
+              body: 'Upload the first batch — photographs appear in albums and on your frames.',
+              action: { label: 'Upload photographs', onClick: () => void startUpload() },
+            }),
+          );
+        }
         return;
       }
       for (const p of photos) grid.append(photoTile(p, deletedView));
@@ -113,10 +144,7 @@ export function renderLibrary(root: HTMLElement): void {
     }
   };
 
-  uploadBtn.addEventListener('click', async () => {
-    const files = await pickFiles('image/jpeg,image/png,image/webp', true);
-    await doUpload(files);
-  });
+  uploadBtn.addEventListener('click', () => void startUpload());
 
   // Drag & drop.
   drop.addEventListener('dragover', (e) => {
