@@ -18,7 +18,7 @@ import {
   type FrameConfig,
   type PairingChallenge,
 } from '../api';
-import { banner, clear, confirmAction, emptyState, formatBytes, formatDateTime, h, kvRow, openModal, revealSecret } from '../components';
+import { banner, clear, confirmAction, emptyState, formatBytes, formatDateTime, h, kvRow, openModal, revealSecret, timeAgo } from '../components';
 
 // statusMeta maps the server-derived device status to a pill class and
 // label (spec §13: the UI must distinguish these states).
@@ -205,9 +205,14 @@ export function renderFrames(root: HTMLElement): void {
     const meta = statusMeta(d.status);
     const lastSeen = d.last_heartbeat_at ?? d.health?.last_sync_at;
     const version = d.health?.version ?? '—';
+    // "recently seen" spans up to 24h; show the real age so a frame
+    // down for hours doesn't read as freshly active.
+    const statusLabel = d.status === 'recently_seen' && lastSeen
+      ? `seen ${timeAgo(lastSeen)}`
+      : meta.label;
     tr.append(
       h('td', {}, d.name),
-      h('td', {}, h('span', { class: 'pill ' + meta.cls }, revoked ? 'revoked' : meta.label)),
+      h('td', {}, h('span', { class: 'pill ' + meta.cls }, revoked ? 'revoked' : statusLabel)),
       h('td', { class: 'muted' }, formatDateTime(lastSeen)),
       h('td', { class: 'muted mono' }, version),
       h('td', {}, String(d.album_count)),

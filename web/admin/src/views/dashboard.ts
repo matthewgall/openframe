@@ -1,5 +1,5 @@
 import { getHealth, getStats, listDevices, photoFileURL, type DeviceStatus, type Stats } from '../api';
-import { clear, emptyState, formatBytes, formatDateTime, h, kvRow } from '../components';
+import { clear, emptyState, formatBytes, formatDateTime, h, kvRow, timeAgo } from '../components';
 
 export function renderDashboard(root: HTMLElement): void {
   const statsGrid = h('div', { class: 'stat-grid' });
@@ -64,7 +64,22 @@ export function renderDashboard(root: HTMLElement): void {
           kvRow(framesKv, 'Registered', '0 — pair your first frame (Frames → Pending pairing)');
         } else {
           const order: DeviceStatus[] = ['online', 'sync_error', 'updating', 'update_failed', 'rollback', 'recently_seen', 'offline'];
-          const parts = order.filter((k) => counts.get(k)).map((k) => `${counts.get(k)} ${k.replace('_', ' ')}`);
+          const parts = order.filter((k) => counts.get(k)).map((k) => {
+            const n = counts.get(k) ?? 0;
+            if (k === 'recently_seen') {
+              // "recently seen" spans up to 24h — carry the real age of
+              // the oldest so a frame down for hours doesn't read as
+              // freshly active.
+              const oldest = active
+                .filter((d) => d.status === 'recently_seen')
+                .map((d) => d.last_heartbeat_at ?? '')
+                .filter(Boolean)
+                .sort()[0];
+              if (!oldest) return `${n} seen recently`;
+              return n === 1 ? `1 seen ${timeAgo(oldest)}` : `${n} seen (oldest ${timeAgo(oldest)})`;
+            }
+            return `${n} ${k.replace('_', ' ')}`;
+          });
           kvRow(framesKv, 'Status', parts.join(' · '));
         }
         // No Total/Revoked rows here: the Devices stat card already

@@ -49,6 +49,22 @@ export function formatDateTime(iso?: string): string {
   });
 }
 
+// timeAgo renders a compact relative age ("42s ago", "5h ago", "2d ago").
+// Status pills like "seen 5h ago" carry the actual age — a bare
+// "recently seen" hides how recently.
+export function timeAgo(iso?: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const s = Math.max(0, (Date.now() - d.getTime()) / 1000);
+  if (s < 60) return `${Math.floor(s)}s ago`;
+  const m = s / 60;
+  if (m < 60) return `${Math.floor(m)}m ago`;
+  const h = m / 60;
+  if (h < 24) return `${Math.floor(h)}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
 // --- Banner (in-view feedback) ---------------------------------------------
 
 export function banner(el: HTMLElement, kind: 'info' | 'error' | 'success', text: string): void {
