@@ -28,6 +28,14 @@ type HealthReport struct {
 	ErrorCount24h    int      `json:"error_count_24h"`
 	RecentErrors     []string `json:"recent_errors"` // short summaries
 	UpdateState      string   `json:"update_state"`  // none|updating|update_failed|rollback|unknown (M6 updater states, reported by the frame from the updater's state file)
+
+	// HeartbeatIntervalSeconds is the interval at which the frame
+	// sends health reports — the only liveness cadence the server can
+	// trust, because only the frame knows it (0 = unknown, the server
+	// falls back to defaultHeartbeat). Thresholds derived from it
+	// (onlineWindow) make "delayed vs missed" per-device instead of
+	// assumed.
+	HeartbeatIntervalSeconds int `json:"heartbeat_interval_seconds"`
 }
 
 // Sanitize bounds untrusted frame input before storage.
@@ -70,6 +78,11 @@ func (h *HealthReport) Sanitize() {
 			*f = (*f)[:32]
 		}
 	}
+	// A reported cadence outside [5s, 10m] is a bug or a hostile frame;
+	// treat it as unknown rather than let it distort liveness.
+	if h.HeartbeatIntervalSeconds < 5 || h.HeartbeatIntervalSeconds > 600 {
+		h.HeartbeatIntervalSeconds = 0
+	}
 	if h.ErrorCount24h < 0 || h.ErrorCount24h > 1e6 {
 		h.ErrorCount24h = 0
 	}
@@ -111,9 +124,22 @@ const (
 )
 
 const (
-	onlineWithin   = 90 * time.Second // 3+ missed heartbeats
-	recentlyWithin = 24 * time.Hour
+	// defaultHeartbeat is the liveness cadence assumed when a frame
+	// does not (or cannot) report its own — the build constant both
+	// sides started from.
+	defaultHeartbeat = 30 * time.Second
+	recentlyWithin   = 24 * time.Hour
 )
+
+// onlineWindow: a frame counts as online while at most one heartbeat
+// has been missed (2× its reported cadence). An unknown or out-of-
+// range report falls back to the default.
+func onlineWindow(h *HealthReport) time.Duration {
+	if h != nil && h.HeartbeatIntervalSeconds >= 5 && h.HeartbeatIntervalSeconds <= 600 {
+		return time.Duration(h.HeartbeatIntervalSeconds) * time.Second * 2
+	}
+	return 2 * defaultHeartbeat
+}
 
 // HealthWithDevice joins a device with its latest report for the
 // admin API.
@@ -142,8 +168,9 @@ func (s *Store) ReportHealth(ctx context.Context, deviceID string, h *HealthRepo
 		 device_id, version, uptime_seconds, last_sync_at, last_sync_ok,
 		 manifest_revision, pending_downloads, storage_total, storage_used,
 		 cache_bytes, mem_total_mb, mem_used_mb, cpu_temp_c, display_driver,
-		 display_status, error_count_24h, recent_errors, update_state, reported_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 display_status, error_count_24h, recent_errors, update_state, reported_at,
+		 heartbeat_interval
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(device_id) DO UPDATE SET
 		   version = excluded.version,
 		   uptime_seconds = excluded.uptime_seconds,
@@ -162,11 +189,13 @@ func (s *Store) ReportHealth(ctx context.Context, deviceID string, h *HealthRepo
 		   error_count_24h = excluded.error_count_24h,
 		   recent_errors = excluded.recent_errors,
 		   update_state = excluded.update_state,
-		   reported_at = excluded.reported_at`,
+		   reported_at = excluded.reported_at,
+		   heartbeat_interval = excluded.heartbeat_interval`,
 		deviceID, h.Version, h.UptimeSeconds, h.LastSyncAt, btoi(h.LastSyncOK),
 		h.ManifestRevision, h.PendingDownloads, h.StorageTotal, h.StorageUsed,
 		h.CacheBytes, h.MemTotalMB, h.MemUsedMB, temp, h.DisplayDriver,
-		h.DisplayStatus, h.ErrorCount24h, errs, h.UpdateState, now)
+		h.DisplayStatus, h.ErrorCount24h, errs, h.UpdateState, now,
+		h.HeartbeatIntervalSeconds)
 	if err != nil {
 		return err
 	}
@@ -188,12 +217,14 @@ func (s *Store) GetHealth(ctx context.Context, deviceID string) (*HealthReport, 
 		`SELECT version, uptime_seconds, last_sync_at, last_sync_ok,
 		        manifest_revision, pending_downloads, storage_total, storage_used,
 		        cache_bytes, mem_total_mb, mem_used_mb, cpu_temp_c, display_driver,
-		        display_status, error_count_24h, recent_errors, update_state, reported_at
+		        display_status, error_count_24h, recent_errors, update_state, reported_at,
+		        heartbeat_interval
 		   FROM device_health WHERE device_id = ?`, deviceID).Scan(
 		&h.Version, &h.UptimeSeconds, &h.LastSyncAt, &h.LastSyncOK,
 		&h.ManifestRevision, &h.PendingDownloads, &h.StorageTotal, &h.StorageUsed,
 		&h.CacheBytes, &h.MemTotalMB, &h.MemUsedMB, &temp, &h.DisplayDriver,
-		&h.DisplayStatus, &h.ErrorCount24h, &errsJSON, &h.UpdateState, &reported)
+		&h.DisplayStatus, &h.ErrorCount24h, &errsJSON, &h.UpdateState, &reported,
+		&h.HeartbeatIntervalSeconds)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -250,7 +281,7 @@ func DeriveStatus(lastHeartbeat *time.Time, h *HealthReport, now time.Time) stri
 		return StatusOffline
 	}
 	age := now.Sub(*lastHeartbeat)
-	if age <= onlineWithin {
+	if age <= onlineWindow(h) {
 		if h != nil && !h.LastSyncOK && h.LastSyncAt != "" {
 			return StatusSyncError
 		}
@@ -330,7 +361,8 @@ func (s *Store) allHealth(ctx context.Context) (map[string]*HealthReport, error)
 		`SELECT device_id, version, uptime_seconds, last_sync_at, last_sync_ok,
 		        manifest_revision, pending_downloads, storage_total, storage_used,
 		        cache_bytes, mem_total_mb, mem_used_mb, cpu_temp_c, display_driver,
-		        display_status, error_count_24h, recent_errors, update_state
+		        display_status, error_count_24h, recent_errors, update_state,
+		        heartbeat_interval
 		   FROM device_health`)
 	if err != nil {
 		return nil, err
@@ -347,7 +379,8 @@ func (s *Store) allHealth(ctx context.Context) (map[string]*HealthReport, error)
 		if err := rows.Scan(&id, &h.Version, &h.UptimeSeconds, &h.LastSyncAt, &ok,
 			&h.ManifestRevision, &h.PendingDownloads, &h.StorageTotal, &h.StorageUsed,
 			&h.CacheBytes, &h.MemTotalMB, &h.MemUsedMB, &temp, &h.DisplayDriver,
-			&h.DisplayStatus, &h.ErrorCount24h, &errsJSON, &h.UpdateState); err != nil {
+			&h.DisplayStatus, &h.ErrorCount24h, &errsJSON, &h.UpdateState,
+			&h.HeartbeatIntervalSeconds); err != nil {
 			return nil, err
 		}
 		h.LastSyncOK = ok != 0

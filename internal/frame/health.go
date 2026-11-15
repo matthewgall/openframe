@@ -49,6 +49,11 @@ type healthPayload struct {
 	ErrorCount24h    int      `json:"error_count_24h"`
 	RecentErrors     []string `json:"recent_errors"`
 	UpdateState      string   `json:"update_state"`
+
+	// HeartbeatIntervalSeconds tells the server this frame's liveness
+	// cadence so its online/offline thresholds match how fast we
+	// actually ping (the server otherwise assumes a default).
+	HeartbeatIntervalSeconds int `json:"heartbeat_interval_seconds"`
 }
 
 // errorRing is a bounded, mutex-guarded ring of recent error summaries.
@@ -90,6 +95,9 @@ func (f *Frame) buildHealth(ctx context.Context) healthPayload {
 		Version:       version.Version,
 		UptimeSeconds: int64(time.Since(f.started).Seconds()),
 		UpdateState:   f.updateStatus(),
+		// Our own liveness cadence — the frame is the source of truth
+		// for how fast it pings; the server derives thresholds from it.
+		HeartbeatIntervalSeconds: int(heartbeatInterval.Seconds()),
 	}
 
 	if f.engine != nil {

@@ -281,3 +281,49 @@ func TestFrameConfigJSONRoundtrip(t *testing.T) {
 func ptrF(v float64) *float64 { return &v }
 func ptrB(v bool) *bool       { return &v }
 func ptrF0(v int) *int        { return &v }
+
+// TestDeriveStatusUsesReportedHeartbeatInterval: liveness thresholds
+// follow the cadence the frame reports (online = 2× its interval),
+// with the build-time default for frames that report nothing.
+func TestDeriveStatusUsesReportedHeartbeatInterval(t *testing.T) {
+	now := time.Now().UTC()
+	mk := func(interval int) *HealthReport {
+		h := &HealthReport{}
+		h.HeartbeatIntervalSeconds = interval
+		h.Sanitize()
+		return h
+	}
+
+	// Slow frame (60s cadence): 100s silent is within one missed
+	// heartbeat → online. The old fixed 90s window would have called
+	// this recently_seen.
+	h60 := mk(60)
+	s100 := now.Add(-100 * time.Second)
+	if st := DeriveStatus(&s100, h60, now); st != StatusOnline {
+		t.Fatalf("60s frame, 100s silent: %q, want online", st)
+	}
+	// ...but 150s silent has missed one and is past 2× → not online.
+	s150 := now.Add(-150 * time.Second)
+	if st := DeriveStatus(&s150, h60, now); st != StatusRecentlySeen {
+		t.Fatalf("60s frame, 150s silent: %q, want recently_seen", st)
+	}
+
+	// Default cadence (no report): 60s silent is one missed 30s ping
+	// → still online; 70s is past 2× → recently_seen.
+	h0 := mk(0)
+	s60 := now.Add(-60 * time.Second)
+	if st := DeriveStatus(&s60, h0, now); st != StatusOnline {
+		t.Fatalf("default frame, 60s silent: %q, want online", st)
+	}
+	s70 := now.Add(-70 * time.Second)
+	if st := DeriveStatus(&s70, h0, now); st != StatusRecentlySeen {
+		t.Fatalf("default frame, 70s silent: %q, want recently_seen", st)
+	}
+
+	// Hostile/buggy reports collapse to the default, they must not
+	// stretch the window (interval 0 after sanitize).
+	late := now.Add(-5 * time.Minute)
+	if st := DeriveStatus(&late, mk(999999), now); st != StatusRecentlySeen {
+		t.Fatalf("out-of-range interval, 5m silent: %q, want recently_seen", st)
+	}
+}
