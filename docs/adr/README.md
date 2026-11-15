@@ -18,3 +18,4 @@ they are marked superseded with a pointer.
 | [ADR-0010](ADR-0010-logging.md) | Structured logging: log/slog, JSON default | accepted |
 | [ADR-0011](ADR-0011-multi-arch-cross-compile.md) | Multi-architecture support via pure-Go cross-compilation | accepted |
 | [ADR-0012](ADR-0012-s3-storage.md) | S3-compatible photo storage on aws-sdk-go-v2 (pure Go, no cgo) | accepted (revised) |
+| [ADR-0013](ADR-0013-destructive-action-confirmation.md) | Destructive actions require confirmation (device/person/secret rule) | accepted |
