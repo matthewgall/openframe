@@ -126,6 +126,7 @@ func (s *Server) Router() http.Handler {
 			g.Post("/auth/logout", s.handleLogout)
 			g.Get("/auth/me", s.handleMe)
 			g.Post("/auth/password", s.handleChangePassword)
+			g.Patch("/auth/profile", s.handleUpdateProfile)
 
 			g.With(requireAdmin).Get("/users", s.handleListUsers)
 			g.With(requireAdmin).Post("/users", s.handleCreateUser)

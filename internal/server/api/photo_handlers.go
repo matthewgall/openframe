@@ -184,6 +184,9 @@ func (s *Server) handleListPhotos(w http.ResponseWriter, r *http.Request) {
 		s.writeDomainError(w, err)
 		return
 	}
+	if ph == nil {
+		ph = []photos.Photo{} // empty list must serialize as [], never null
+	}
 	u, _ := UserFrom(r.Context())
 	if params.Deleted && !u.IsAdmin() {
 		// Non-admins only recover their own uploads.

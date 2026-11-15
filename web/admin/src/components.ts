@@ -105,6 +105,9 @@ export function openModal(title: string, onClose?: () => void): Modal {
 
 export function confirmAction(message: string, verb = 'Delete'): Promise<boolean> {
   return new Promise((resolve) => {
+    // Resolve BEFORE closing: close() fires onClose (resolve(false) —
+    // the "dismissed" path), and a promise can only settle once, so the
+    // affirmative must win the race.
     const m = openModal(verb, () => resolve(false));
     m.body.append(h('p', {}, message));
     const actions = h('div', { class: 'modal-actions' });
@@ -112,8 +115,8 @@ export function confirmAction(message: string, verb = 'Delete'): Promise<boolean
     const ok = h('button', { class: 'btn danger', type: 'button' }, verb);
     cancel.addEventListener('click', () => m.close());
     ok.addEventListener('click', () => {
-      m.close();
       resolve(true);
+      m.close();
     });
     actions.append(cancel, ok);
     m.body.append(actions);

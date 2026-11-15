@@ -1,5 +1,5 @@
 import './style.css';
-import { ApiError, changePassword, currentUser, login, logout, refreshMe } from './api';
+import { ApiError, changePassword, currentUser, login, logout, refreshMe, updateProfile } from './api';
 import { h } from './components';
 import { renderAlbums } from './views/albums';
 import { renderAudit } from './views/audit';
@@ -83,8 +83,47 @@ function openAccountMenu(anchor: HTMLElement, onDone: () => void): void {
   const me = currentUser();
   menu.append(h('div', { class: 'menu-head muted' }, me?.email ?? ''));
 
+  const settingsItem = h('button', { class: 'menu-item', type: 'button' }, 'Settings…');
   const changeItem = h('button', { class: 'menu-item', type: 'button' }, 'Change password…');
   const logoutItem = h('button', { class: 'menu-item danger', type: 'button' }, 'Sign out');
+
+  settingsItem.addEventListener('click', () => {
+    menu.remove();
+    const m = h('div', { class: 'modal-overlay', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Account settings' });
+    const dlg = h('div', { class: 'modal' });
+    const body = h('div', { class: 'modal-body' });
+    const name = h('input', { class: 'input', type: 'text', placeholder: 'Display name', autocomplete: 'name' });
+    name.value = me?.display_name ?? '';
+    const email = h('input', { class: 'input', type: 'email', placeholder: 'email@example.com', autocomplete: 'email' });
+    email.value = me?.email ?? '';
+    const errEl = h('div', { class: 'login-error', role: 'alert' });
+    const save = h('button', { class: 'btn primary', type: 'button' }, 'Save');
+    save.addEventListener('click', async () => {
+      errEl.textContent = '';
+      save.disabled = true;
+      try {
+        await updateProfile({
+          display_name: name.value.trim(),
+          email: email.value.trim(),
+        });
+        m.remove();
+        onDone(); // re-render so the header shows the updated identity
+      } catch (e) {
+        errEl.textContent = e instanceof ApiError ? e.message : String(e);
+        save.disabled = false;
+      }
+    });
+    body.append(
+      h('div', { class: 'field' }, h('label', {}, 'Display name'), name),
+      h('div', { class: 'field' }, h('label', {}, 'Email'), email),
+      h('p', { class: 'muted' }, 'Other members will see your new name everywhere it appears.'),
+      errEl,
+      h('div', { class: 'modal-actions' }, save),
+    );
+    dlg.append(h('div', { class: 'modal-head' }, h('h2', {}, 'Account settings')), body);
+    m.append(dlg);
+    document.body.append(m);
+  });
 
   changeItem.addEventListener('click', () => {
     menu.remove();
@@ -129,7 +168,7 @@ function openAccountMenu(anchor: HTMLElement, onDone: () => void): void {
     onDone();
   });
 
-  menu.append(changeItem, logoutItem);
+  menu.append(settingsItem, changeItem, logoutItem);
   anchor.append(menu);
   const away = (e: MouseEvent): void => {
     if (!menu.contains(e.target as Node)) {

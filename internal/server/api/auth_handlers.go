@@ -145,6 +145,39 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "changed"})
 }
 
+type updateProfileRequest struct {
+	DisplayName string `json:"display_name"`
+	Email       string `json:"email"`
+}
+
+// handleUpdateProfile: PATCH /api/v1/auth/profile — a user updates
+// their own display name and/or email. Empty fields are left as-is.
+func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
+	var req updateProfileRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON body")
+		return
+	}
+	if strings.TrimSpace(req.DisplayName) == "" && strings.TrimSpace(req.Email) == "" {
+		writeError(w, http.StatusBadRequest, "bad_request", "nothing to update")
+		return
+	}
+	u, _ := UserFrom(r.Context())
+	updated, err := s.userStore.UpdateProfile(r.Context(), u.ID, req.DisplayName, req.Email)
+	if err != nil {
+		status, code, msg := domainError(err)
+		writeError(w, status, code, msg)
+		return
+	}
+	old := u.Email
+	if old != updated.Email {
+		s.audit(r, "profile.email_changed", "user", u.ID, map[string]string{"from": old, "to": updated.Email})
+	} else {
+		s.audit(r, "profile.updated", "user", u.ID, nil)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"user": publicUser(updated)})
+}
+
 // publicUser is the JSON-safe user shape (never includes the hash).
 func publicUser(u *users.User) map[string]any {
 	m := map[string]any{

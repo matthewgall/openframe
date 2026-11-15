@@ -294,6 +294,19 @@ export function changePassword(current: string, next: string): Promise<unknown> 
   });
 }
 
+// updateProfile changes the signed-in user's own display name and/or
+// email (empty fields are left unchanged server-side) and refreshes
+// the in-memory identity so the header updates immediately.
+export async function updateProfile(body: {
+  display_name?: string;
+  email?: string;
+}): Promise<void> {
+  const data = await request<{
+    user: { id: string; email: string; display_name: string; role: string };
+  }>('PATCH', '/api/v1/auth/profile', body);
+  session.user = data.user;
+}
+
 // --- Users ----------------------------------------------------------------
 
 export function listUsers(activeOnly = false): Promise<{ users: User[] }> {
@@ -346,7 +359,7 @@ export async function uploadPhotos(files: File[]): Promise<UploadResult> {
   return data;
 }
 
-export function listPhotos(params: {
+export async function listPhotos(params: {
   search?: string;
   album?: string;
   deleted?: boolean;
@@ -360,7 +373,14 @@ export function listPhotos(params: {
   if (params.limit) q.set('limit', String(params.limit));
   if (params.offset) q.set('offset', String(params.offset));
   const qs = q.toString();
-  return request('GET', `/api/v1/photos${qs ? `?${qs}` : ''}`);
+  // Guard a null list (an empty result must be [], but never trust it
+  // — the Deleted view crashed on `photos.length` when the server sent
+  // null for an empty trash).
+  const data = await request<{ photos: Photo[] | null; total: number }>(
+    'GET',
+    `/api/v1/photos${qs ? `?${qs}` : ''}`,
+  );
+  return { photos: data.photos ?? [], total: data.total ?? 0 };
 }
 
 export function updatePhoto(id: string, body: { caption?: string; capture_date?: string }): Promise<{ photo: Photo }> {

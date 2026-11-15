@@ -74,6 +74,10 @@ func domainError(err error) (int, string, string) {
 		return http.StatusConflict, "email_taken", "email is already registered"
 	case errors.Is(err, users.ErrInvalidRole):
 		return http.StatusBadRequest, "invalid_role", "role must be admin or member"
+	case errors.Is(err, users.ErrInvalidEmail):
+		return http.StatusBadRequest, "invalid_email", "email address is not valid"
+	case errors.Is(err, users.ErrNameTooLong):
+		return http.StatusBadRequest, "name_too_long", "display name must be at most 100 characters"
 	case errors.Is(err, users.ErrNoActiveUsers):
 		return http.StatusConflict, "last_active_admin", "cannot deactivate the last active administrator"
 	case errors.Is(err, auth.ErrSessionExpired):

@@ -26,6 +26,8 @@ var (
 	ErrNotFound      = errors.New("users: user not found")
 	ErrEmailTaken    = errors.New("users: email already registered")
 	ErrInvalidRole   = errors.New("users: invalid role")
+	ErrInvalidEmail  = errors.New("users: invalid email")
+	ErrNameTooLong   = errors.New("users: display name too long")
 	ErrNoActiveUsers = errors.New("users: cannot remove the last active user")
 )
 
@@ -176,6 +178,65 @@ func (s *Store) Update(ctx context.Context, id, displayName, role string) (*User
 		return nil, err
 	}
 	return s.Get(ctx, id)
+}
+
+// UpdateProfile changes the user's own display name and/or email.
+// Empty values keep the current field. Email is normalised and must
+// be unique (ErrEmailTaken, mapped to 409 by the API layer).
+func (s *Store) UpdateProfile(ctx context.Context, id, displayName, email string) (*User, error) {
+	u, err := s.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	newName := u.DisplayName
+	if d := strings.TrimSpace(displayName); d != "" {
+		if len(d) > 100 {
+			return nil, ErrNameTooLong
+		}
+		newName = d
+	}
+	newEmail := u.Email
+	if e := NormalizeEmail(email); e != "" {
+		if !validEmail(e) {
+			return nil, ErrInvalidEmail
+		}
+		newEmail = e
+	}
+	if newEmail != u.Email {
+		if existing, err := s.GetByEmail(ctx, newEmail); err == nil && existing.ID != u.ID {
+			return nil, ErrEmailTaken
+		}
+	}
+	if _, err := s.dbh.ExecContext(ctx,
+		`UPDATE users SET display_name = ?, email = ?, updated_at = ?
+		  WHERE id = ?`,
+		newName, newEmail, time.Now().UTC().Format(time.RFC3339), id); err != nil {
+		if isUniqueViolation(err) {
+			return nil, ErrEmailTaken
+		}
+		return nil, err
+	}
+	return s.Get(ctx, id)
+}
+
+// validEmail is a pragmatic format check (local@domain.tld); the DB
+// uniqueness index does the heavy lifting, this just rejects obvious
+// garbage before it becomes someone's login identity.
+func validEmail(e string) bool {
+	at := strings.LastIndex(e, "@")
+	if at < 1 || at == len(e)-1 {
+		return false
+	}
+	domain := e[at+1:]
+	if !strings.Contains(domain, ".") {
+		return false
+	}
+	for _, c := range e {
+		if c == ' ' || c == '<' || c == '>' || c == '"' {
+			return false
+		}
+	}
+	return true
 }
 
 // SetPassword replaces the password (hashed).
