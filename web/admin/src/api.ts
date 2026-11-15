@@ -351,12 +351,26 @@ export async function uploadPhotos(files: File[]): Promise<UploadResult> {
     opts.headers = { 'X-CSRF-Token': session.csrf };
   }
   const res = await fetch('/api/v1/photos/upload', opts);
-  const data = (await res.json()) as UploadResult;
-  if (!res.ok && !(res.status === 422 && data.created?.length)) {
-    const errBody = data as any;
+  const text = await res.text();
+  let data: unknown;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    // Non-JSON response (a proxy/TLS terminator error page, a
+    // Cloudflare challenge, …). Surface the status instead of a raw
+    // SyntaxError — the body of a challenge page is useless to the user.
+    throw new ApiError(
+      res.status,
+      'non_json_response',
+      `upload response was not JSON (HTTP ${res.status}) — a proxy or security layer (e.g. a Cloudflare challenge) may have intercepted the request`,
+    );
+  }
+  const result = data as UploadResult;
+  if (!res.ok && !(res.status === 422 && result.created?.length)) {
+    const errBody = result as any;
     throw new ApiError(res.status, errBody?.code ?? 'upload_failed', errBody?.error ?? `HTTP ${res.status}`);
   }
-  return data;
+  return result;
 }
 
 export async function listPhotos(params: {
