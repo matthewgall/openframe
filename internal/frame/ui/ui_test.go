@@ -215,6 +215,36 @@ func TestSlideshowShowsPhotoAndChrome(t *testing.T) {
 	}
 }
 
+// TestSlideshowCaptionBarOnlyWithCaptionOrDate pins the caption-bar
+// visibility rule: a photo with neither caption nor capture date must
+// NOT draw the bar (the filename alone is storage metadata, not worth
+// the chrome). A photo with a date but no caption draws the bar with
+// the date promoted to the main line.
+func TestSlideshowCaptionBarOnlyWithCaptionOrDate(t *testing.T) {
+	naked := Photo{
+		Hash:        "hn",
+		Name:        "IMG_20260101_000000.jpg",
+		DisplayPath: writePhoto(t, color.NRGBA{200, 30, 30, 255}),
+		ThumbPath:   writePhoto(t, color.NRGBA{200, 30, 30, 255}),
+	}
+	env := newUIEnv(t, []Photo{naked}, nil)
+	if p := env.px(640, 790); p.R < 150 || p.G > 100 {
+		t.Errorf("bottom row = %v, want bare photo red (no caption bar)", p)
+	}
+
+	dated := Photo{
+		Hash:        "hd",
+		Name:        "IMG_20260101_000001.jpg",
+		CaptureDate: time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC),
+		DisplayPath: writePhoto(t, color.NRGBA{200, 30, 30, 255}),
+		ThumbPath:   writePhoto(t, color.NRGBA{200, 30, 30, 255}),
+	}
+	env2 := newUIEnv(t, []Photo{dated}, nil)
+	if p := env2.px(640, 790); p.R > 150 {
+		t.Errorf("bottom row = %v, want caption bar (date present)", p)
+	}
+}
+
 func TestSlideshowSwipeAdvances(t *testing.T) {
 	photos := testPhotos(t, 3)
 	env := newUIEnv(t, photos, nil)

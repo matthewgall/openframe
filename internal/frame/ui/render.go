@@ -97,8 +97,9 @@ func (e *Engine) renderSlideshow() {
 		e.drawClock()
 	}
 
-	// Optional caption bar (bottom).
-	if e.cfg.ShowCaption && (p.Name != "" || p.Caption != "" || !p.CaptureDate.IsZero()) {
+	// Optional caption bar (bottom). Shown for a caption and/or a
+	// capture date — the filename alone is not worth the chrome.
+	if e.cfg.ShowCaption && (p.Caption != "" || !p.CaptureDate.IsZero()) {
 		e.drawCaption(p)
 	}
 
@@ -124,18 +125,18 @@ func (e *Engine) drawCaption(p *Photo) {
 	y := e.h - barH
 	e.cv.FillRect(0, y, e.w, barH, color.NRGBA{0, 0, 0, 160})
 	f := e.cv.Font(fontBody)
-	line1 := p.Name
+	// The caption leads and the capture date is the sub-line. The
+	// filename is deliberately absent from the frame: it is storage
+	// metadata ("IMG_20261101_145505.jpg"), not what a viewer of the
+	// photo cares about. With no caption, the date promotes to the
+	// main line so the bar never renders a ghost row.
+	line1 := p.Caption
 	line2 := ""
-	if p.Caption != "" {
-		line2 = p.Caption
-	}
 	if !p.CaptureDate.IsZero() {
-		d := p.CaptureDate.Format("2 Jan 2006")
-		if line2 == "" {
-			line2 = d
-		} else {
-			line2 = d + "  —  " + line2
-		}
+		line2 = p.CaptureDate.Format("2 Jan 2006")
+	}
+	if line1 == "" {
+		line1, line2 = line2, ""
 	}
 	if line1 != "" {
 		f.DrawText(e.cv.Image(), margin*2, y+14, truncate(line1, 40), colText)
