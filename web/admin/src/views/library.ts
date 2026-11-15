@@ -213,28 +213,40 @@ export function renderLibrary(root: HTMLElement): void {
   root.append(feedback);
 
   const grid = h('div', { class: 'photo-grid' });
-  root.append(grid);
+  const moreWrap = h('div', { style: 'display:flex;justify-content:center;margin-top:1rem', hidden: '' });
+  const moreBtn = h('button', { class: 'btn ghost', type: 'button' }, '');
+  moreWrap.append(moreBtn);
+  root.append(grid, moreWrap);
 
   let deletedView = false;
   let searchTimer: number | undefined;
   let lastPhotos: Photo[] = [];
   let lastTotal = 0;
-  let loaded = false;
+  let haveData = false;
+  let loadingMore = false;
+  let seq = 0; // guards stale page responses (search/trash changed mid-flight)
 
   const startUpload = async (): Promise<void> => {
     const files = await pickFiles('image/jpeg,image/png,image/webp', true);
     await doUpload(files);
   };
 
-  // paintGrid draws from the given data synchronously. Selection-only
+  // paintGrid draws the loaded pages synchronously. Selection-only
   // changes repaint from the cache (repaint) so the grid does not
   // clear-and-flash on every toggle.
-  const paintGrid = (photos: Photo[], total: number): void => {
+  const syncMore = (): void => {
+    const remaining = lastTotal - lastPhotos.length;
+    moreWrap.hidden = !haveData || remaining <= 0;
+    moreBtn.textContent = loadingMore ? 'Loading…' : `Load more (${remaining} more)`;
+    moreBtn.disabled = loadingMore;
+  };
+
+  const paintGrid = (): void => {
     clear(grid);
     count.textContent = deletedView
-      ? `${total} deleted photograph${total === 1 ? '' : 's'}`
-      : `${total} photograph${total === 1 ? '' : 's'}`;
-    if (photos.length === 0) {
+      ? `${lastTotal} deleted photograph${lastTotal === 1 ? '' : 's'}`
+      : `${lastTotal} photograph${lastTotal === 1 ? '' : 's'}`;
+    if (lastPhotos.length === 0) {
       const q = search.value.trim();
       if (deletedView) {
         grid.append(
@@ -262,35 +274,71 @@ export function renderLibrary(root: HTMLElement): void {
           }),
         );
       }
+      syncMore();
       return;
     }
-    for (const p of photos) grid.append(photoTile(p, deletedView));
+    for (const p of lastPhotos) grid.append(photoTile(p, deletedView));
+    syncMore();
   };
 
   const render = async (): Promise<void> => {
     if (deletedView && selecting) exitSelecting();
+    const my = ++seq; // invalidate any in-flight page loads
     pagePhotos = [];
     clear(grid);
     grid.append(h('div', { class: 'loading' }, 'Loading…'));
+    moreWrap.hidden = true;
     try {
       const { photos, total } = await listPhotos({
         search: search.value.trim() || undefined,
         deleted: deletedView,
         limit: PAGE,
+        offset: 0,
       });
+      if (my !== seq) return; // superseded by a newer render
       lastPhotos = photos;
       lastTotal = total;
-      loaded = true;
+      haveData = true;
       pagePhotos = photos;
-      paintGrid(photos, total);
+      paintGrid();
     } catch (err) {
+      if (my !== seq) return;
       clear(grid);
       grid.append(h('div', { class: 'muted' }, `Failed to load: ${String(err)}`));
+      moreWrap.hidden = true;
     }
   };
 
+  moreBtn.addEventListener('click', async () => {
+    if (loadingMore || lastPhotos.length >= lastTotal) return;
+    const my = seq;
+    loadingMore = true;
+    syncMore();
+    try {
+      const { photos, total } = await listPhotos({
+        search: search.value.trim() || undefined,
+        deleted: deletedView,
+        limit: PAGE,
+        offset: lastPhotos.length,
+      });
+      if (my !== seq) return; // superseded — the new render owns the grid
+      lastPhotos.push(...photos);
+      lastTotal = total;
+      pagePhotos = lastPhotos;
+      for (const p of photos) grid.append(photoTile(p, deletedView));
+      syncMore();
+    } catch (err) {
+      if (my !== seq) return;
+      banner(root, 'error', `Failed to load more: ${String(err)}`);
+      loadingMore = false;
+      syncMore();
+    }
+    loadingMore = false;
+    syncMore();
+  });
+
   const repaint = (): void => {
-    if (loaded) paintGrid(lastPhotos, lastTotal);
+    if (haveData) paintGrid();
     else void render();
   };
 
