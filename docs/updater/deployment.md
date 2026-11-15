@@ -141,6 +141,69 @@ install needs no updater-side registration.
 
 ## Operations
 
+### Cutting a release (release server operator)
+
+`openframe release` exists so the operator never assembles Ed25519
+keypairs, canonical metadata or multipart uploads by hand. All of it
+runs from the same binary, on any machine with network access to the
+server (convention: the release server itself).
+
+**Once, at the start** — generate the release keypair:
+
+```sh
+openframe release keygen --key-id openframe-2026 \
+  --out-dir /home/operator/openframe-release \
+  --note "initial release key"
+```
+
+This writes two files. Keep them apart:
+
+- `release-key-openframe-2026.private` (0600) — the signing key.
+  Stays on the release machine. Losing it means every future release
+  needs a signed key rotation.
+- `trusted-keys-openframe-2026.json` (0600) — the device trust file.
+  Deploy to **every frame** as `/opt/openframe/trusted-keys.json`
+  (installation step 2 above). Frames accept releases signed only by
+  keys in this file; the release server itself is untrusted.
+
+**Per release, per platform** — hash, sign, publish:
+
+```sh
+# Build the artifact for the target platform (see the Makefile /
+# CI matrix), then:
+openframe release sign --version 0.2.0 --channel stable \
+  --os linux --arch arm64 \
+  --artifact dist/openframe-linux-arm64 \
+  --key /home/operator/openframe-release/release-key-openframe-2026.private \
+  --rollout 100          # staged: start at 10, or --canary DEVICE_ID
+
+openframe release publish --server https://openframe.gall.family \
+  --email admin@localhost --password <from the operator's secret store> \
+  --metadata openframe-0.2.0-stable-linux-arm64.json \
+  --artifact dist/openframe-linux-arm64
+```
+
+`sign` hashes the artifact (SHA-256 + size go into the metadata),
+sets `min_schema` to the schema this binary ships (override with
+`--min-schema`), signs with the pinned key id, self-verifies, and
+writes the metadata file. `publish` admin-logs in and uploads
+metadata + artifact; the server stores the metadata **verbatim** and
+trusts no signature — a frame's pinned trust file is authoritative.
+Useful flags: `--canary ID[,ID...]` (always-in allow-list for
+development frames), `--not-before` / `--expires-at` (staged rollout
+bounds), `--rollback` (publishing an older version as a safe rollback
+target).
+
+**Sanity checks without a frame:**
+
+```sh
+openframe release verify --metadata <file> --trust <trusted-keys file>
+openframe update check   # on a frame: what would the updater do?
+```
+
+`verify` failing means a frame with that trust file would reject the
+release — fix the key or the metadata before publishing.
+
 ### Check what a frame would do (read-only)
 
 ```sh

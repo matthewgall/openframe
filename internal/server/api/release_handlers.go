@@ -124,8 +124,24 @@ func (s *Server) handleUploadRelease(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_upload", "expected multipart form with 'metadata' and 'artifact'")
 		return
 	}
+	// Accept the metadata as a plain form field (FormValue) or as a
+	// file field (curl -F metadata=@release.json) — file fields are
+	// invisible to FormValue, so both paths are needed for the curl
+	// convenience to work.
 	metaField := r.FormValue("metadata")
+	var metaReader io.Reader
 	if metaField == "" {
+		metaFile, metaHeader, err := r.FormFile("metadata")
+		if err == nil {
+			metaReader = metaFile
+			defer metaFile.Close()
+			if metaHeader.Size > 1<<20 {
+				writeError(w, http.StatusRequestEntityTooLarge, "metadata_too_large", "metadata exceeds 1 MiB")
+				return
+			}
+		}
+	}
+	if metaField == "" && metaReader == nil {
 		writeError(w, http.StatusBadRequest, "invalid_upload", "missing 'metadata' field")
 		return
 	}
@@ -149,7 +165,22 @@ func (s *Server) handleUploadRelease(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusRequestEntityTooLarge, "artifact_too_large", "artifact exceeds the limit")
 		return
 	}
-	rel, err := s.releaseStore.Upload(r.Context(), []byte(metaField), artifact)
+	var metadataBytes []byte
+	if metaField != "" {
+		metadataBytes = []byte(metaField)
+	} else {
+		metadataBytes, err = io.ReadAll(io.LimitReader(metaReader, 1<<20+1))
+		if err != nil {
+			s.log.Error("release metadata read", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal", "failed to read metadata")
+			return
+		}
+		if int64(len(metadataBytes)) > 1<<20 {
+			writeError(w, http.StatusRequestEntityTooLarge, "metadata_too_large", "metadata exceeds 1 MiB")
+			return
+		}
+	}
+	rel, err := s.releaseStore.Upload(r.Context(), metadataBytes, artifact)
 	if errors.Is(err, releases.ErrDuplicate) {
 		writeError(w, http.StatusConflict, "duplicate_release", "this version/channel/platform is already uploaded")
 		return

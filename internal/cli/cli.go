@@ -38,6 +38,7 @@ var commands = []command{
 	{"doctor", "diagnose the local system and OpenFrame state", runDoctor},
 	{"status", "show local OpenFrame status", runStatus},
 	{"update", "frame-side update operations (status/check/request/reset)", runUpdate},
+	{"release", "create, sign and publish releases (keygen/sign/verify/publish)", runRelease},
 	{"backup", "back up and verify data (M7)", runBackup},
 	{"restore", "restore data from a backup (M7)", runRestore},
 	{"version", "print version information", runVersion},
