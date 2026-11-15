@@ -78,19 +78,19 @@ export function renderLibrary(root: HTMLElement): void {
     grid.classList.toggle('selecting', selecting);
     if (!selecting) selection.clear();
     updateSelBar();
-    void render();
+    repaint();
   });
 
   clearSelBtn.addEventListener('click', () => {
     selection.clear();
     updateSelBar();
-    void render();
+    repaint();
   });
 
   selectAllBtn.addEventListener('click', () => {
     for (const p of pagePhotos) selection.add(p.id);
     updateSelBar();
-    void render();
+    repaint();
   });
 
   selDeleteBtn.addEventListener('click', async () => {
@@ -190,7 +190,7 @@ export function renderLibrary(root: HTMLElement): void {
         selection.clear();
         updateSelBar();
         banner(root, 'success', `Added ${n} photograph${n === 1 ? '' : 's'} to ${targets.length === 1 ? targetNames[0] : `${targets.length} albums`}.`);
-        void render();
+        repaint(); // library data unchanged — no need to refetch
       } catch (err) {
         confirmBtn.disabled = false;
         createAddBtn.disabled = false;
@@ -217,10 +217,54 @@ export function renderLibrary(root: HTMLElement): void {
 
   let deletedView = false;
   let searchTimer: number | undefined;
+  let lastPhotos: Photo[] = [];
+  let lastTotal = 0;
+  let loaded = false;
 
   const startUpload = async (): Promise<void> => {
     const files = await pickFiles('image/jpeg,image/png,image/webp', true);
     await doUpload(files);
+  };
+
+  // paintGrid draws from the given data synchronously. Selection-only
+  // changes repaint from the cache (repaint) so the grid does not
+  // clear-and-flash on every toggle.
+  const paintGrid = (photos: Photo[], total: number): void => {
+    clear(grid);
+    count.textContent = deletedView
+      ? `${total} deleted photograph${total === 1 ? '' : 's'}`
+      : `${total} photograph${total === 1 ? '' : 's'}`;
+    if (photos.length === 0) {
+      const q = search.value.trim();
+      if (deletedView) {
+        grid.append(
+          emptyState({
+            icon: 'trash',
+            title: 'Nothing in the trash',
+            body: 'Deleted photographs stay here until you restore them.',
+          }),
+        );
+      } else if (q) {
+        grid.append(
+          emptyState({
+            icon: 'search',
+            title: 'No matches',
+            body: `No photographs match “${q}”.`,
+          }),
+        );
+      } else {
+        grid.append(
+          emptyState({
+            icon: 'photo',
+            title: 'No photographs yet',
+            body: 'Upload the first batch — photographs appear in albums and on your frames.',
+            action: { label: 'Upload photographs', onClick: () => void startUpload() },
+          }),
+        );
+      }
+      return;
+    }
+    for (const p of photos) grid.append(photoTile(p, deletedView));
   };
 
   const render = async (): Promise<void> => {
@@ -234,46 +278,20 @@ export function renderLibrary(root: HTMLElement): void {
         deleted: deletedView,
         limit: PAGE,
       });
+      lastPhotos = photos;
+      lastTotal = total;
+      loaded = true;
       pagePhotos = photos;
-      clear(grid);
-      count.textContent = deletedView
-        ? `${total} deleted photograph${total === 1 ? '' : 's'}`
-        : `${total} photograph${total === 1 ? '' : 's'}`;
-      if (photos.length === 0) {
-        const q = search.value.trim();
-        if (deletedView) {
-          grid.append(
-            emptyState({
-              icon: 'trash',
-              title: 'Nothing in the trash',
-              body: 'Deleted photographs stay here until you restore them.',
-            }),
-          );
-        } else if (q) {
-          grid.append(
-            emptyState({
-              icon: 'search',
-              title: 'No matches',
-              body: `No photographs match “${q}”.`,
-            }),
-          );
-        } else {
-          grid.append(
-            emptyState({
-              icon: 'photo',
-              title: 'No photographs yet',
-              body: 'Upload the first batch — photographs appear in albums and on your frames.',
-              action: { label: 'Upload photographs', onClick: () => void startUpload() },
-            }),
-          );
-        }
-        return;
-      }
-      for (const p of photos) grid.append(photoTile(p, deletedView));
+      paintGrid(photos, total);
     } catch (err) {
       clear(grid);
       grid.append(h('div', { class: 'muted' }, `Failed to load: ${String(err)}`));
     }
+  };
+
+  const repaint = (): void => {
+    if (loaded) paintGrid(lastPhotos, lastTotal);
+    else void render();
   };
 
   search.addEventListener('input', () => {
@@ -339,6 +357,12 @@ export function renderLibrary(root: HTMLElement): void {
     if (selectable && selection.has(p.id)) tile.classList.add('selected');
     const imgWrap = h('div', { class: 'photo-thumb' });
     imgWrap.append(h('img', { src: photoFileURL(p.id, 'thumb'), alt: p.original_name, loading: 'lazy' }));
+    // The check lives inside .photo-thumb (the positioned ancestor) —
+    // a check on the tile itself would escape to the top-left of the
+    // app, since the figure is not positioned.
+    if (selectable) {
+      imgWrap.append(h('div', { class: 'photo-check' }, selection.has(p.id) ? '✓' : ''));
+    }
     const figcaption = h('figcaption');
     figcaption.append(
       h('div', { class: 'photo-name' }, p.original_name),
@@ -381,10 +405,6 @@ export function renderLibrary(root: HTMLElement): void {
         }
       });
       actions.append(download, del);
-    }
-
-    if (selectable) {
-      tile.append(h('div', { class: 'photo-check' }, selection.has(p.id) ? '✓' : ''));
     }
 
     tile.addEventListener('click', () => {

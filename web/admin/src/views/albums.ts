@@ -244,10 +244,11 @@ export function renderAlbumDetail(root: HTMLElement, albumId: string): void {
       for (const p of vis) {
         const tile = h('figure', { class: 'photo-tile' });
         if (selection.has(p.id)) tile.classList.add('selected');
-        tile.append(
-          h('div', { class: 'photo-thumb' }, h('img', { src: photoFileURL(p.id, 'thumb'), alt: p.original_name, loading: 'lazy' })),
-          h('div', { class: 'photo-check' }, selection.has(p.id) ? '✓' : ''),
-        );
+        // Check inside .photo-thumb (the positioned ancestor), not the
+        // tile — otherwise it escapes to the top-left of the app.
+        const thumb = h('div', { class: 'photo-thumb' }, h('img', { src: photoFileURL(p.id, 'thumb'), alt: p.original_name, loading: 'lazy' }));
+        thumb.append(h('div', { class: 'photo-check' }, selection.has(p.id) ? '✓' : ''));
+        tile.append(thumb);
         tile.addEventListener('click', () => {
           if (selection.has(p.id)) selection.delete(p.id);
           else selection.add(p.id);
