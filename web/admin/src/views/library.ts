@@ -1,6 +1,10 @@
 import {
+  albumAddPhotos,
+  createAlbum,
   currentUser,
   deletePhoto,
+  deletePhotos,
+  listAlbums,
   listPhotos,
   photoFileURL,
   restorePhoto,
@@ -28,10 +32,176 @@ export function renderLibrary(root: HTMLElement): void {
     class: 'btn ghost',
     type: 'button',
   }, 'Recover deleted');
+  // Selection mode: pick photographs in the library, then push them to
+  // albums (or trash) — the Google-Photos direction, which is how
+  // album building actually happens in practice.
+  const selectBtn = h('button', { class: 'btn ghost', type: 'button' }, 'Select');
   void isAdmin;
   const count = h('span', { class: 'muted' }, '');
-  toolbar.append(search, uploadBtn, trashBtn, count);
+  toolbar.append(search, uploadBtn, trashBtn, selectBtn, count);
   root.append(toolbar);
+
+  // Floating selection bar (visible while anything is selected).
+  const selBar = h('div', { class: 'sel-bar', hidden: '' });
+  const selCount = h('span', { class: 'sel-count' }, '');
+  const addAlbumBtn = h('button', { class: 'btn primary', type: 'button' }, 'Add to album');
+  const selectAllBtn = h('button', { class: 'btn ghost', type: 'button' }, 'Select all');
+  const selDeleteBtn = h('button', { class: 'btn ghost danger-text', type: 'button' }, 'Delete');
+  const clearSelBtn = h('button', { class: 'btn ghost', type: 'button' }, 'Clear');
+  selBar.append(selCount, addAlbumBtn, selectAllBtn, selDeleteBtn, clearSelBtn);
+  root.append(selBar);
+
+  let selecting = false;
+  const selection = new Set<string>();
+  let pagePhotos: Photo[] = [];
+
+  const updateSelBar = (): void => {
+    selBar.hidden = selection.size === 0;
+    selCount.textContent = `${selection.size} selected`;
+  };
+
+  const exitSelecting = (): void => {
+    selecting = false;
+    selection.clear();
+    selectBtn.classList.remove('active');
+    grid.classList.remove('selecting');
+    updateSelBar();
+  };
+
+  selectBtn.addEventListener('click', () => {
+    if (deletedView) {
+      banner(root, 'info', 'Selection is for live photographs — restore from the trash first.');
+      return;
+    }
+    selecting = !selecting;
+    selectBtn.classList.toggle('active', selecting);
+    grid.classList.toggle('selecting', selecting);
+    if (!selecting) selection.clear();
+    updateSelBar();
+    void render();
+  });
+
+  clearSelBtn.addEventListener('click', () => {
+    selection.clear();
+    updateSelBar();
+    void render();
+  });
+
+  selectAllBtn.addEventListener('click', () => {
+    for (const p of pagePhotos) selection.add(p.id);
+    updateSelBar();
+    void render();
+  });
+
+  selDeleteBtn.addEventListener('click', async () => {
+    const n = selection.size;
+    const yes = await confirmAction(
+      `Move ${n} photograph${n === 1 ? '' : 's'} to the trash? You can restore them later.`,
+      'Move to trash',
+    );
+    if (!yes) return;
+    try {
+      const res = await deletePhotos([...selection]);
+      banner(root, 'success', `Moved ${res.deleted} photograph${res.deleted === 1 ? '' : 's'} to the trash.`);
+      selection.clear();
+      updateSelBar();
+      void render();
+    } catch (err) {
+      banner(root, 'error', String(err));
+    }
+  });
+
+  addAlbumBtn.addEventListener('click', () => openAddToAlbum());
+
+  function openAddToAlbum(): void {
+    const n = selection.size;
+    const m = openModal(`Add to album — ${n} photograph${n === 1 ? '' : 's'}`);
+    const listWrap = h('div', { class: 'album-pick-list' });
+    listWrap.append(h('div', { class: 'loading' }, 'Loading…'));
+    m.body.append(listWrap);
+
+    const newField = h('div', { class: 'field', style: 'margin-top:1rem' });
+    const newInput = h('input', { class: 'input', placeholder: 'Or create a new album…' });
+    newField.append(h('label', {}, 'New album'), newInput);
+    m.body.append(newField);
+
+    const createAddBtn = h('button', { class: 'btn', type: 'button' }, 'Create & add');
+    const confirmBtn = h('button', { class: 'btn primary', type: 'button' }, 'Add');
+    const cancelBtn = h('button', { class: 'btn ghost', type: 'button' }, 'Cancel');
+    cancelBtn.addEventListener('click', () => m.close());
+    const actions = h('div', { class: 'modal-actions' }, confirmBtn, createAddBtn, cancelBtn);
+    m.body.append(actions);
+
+    const boxTargets = new Map<HTMLInputElement, { id: string; name: string }>();
+    void (async () => {
+      try {
+        const { albums } = await listAlbums();
+        clear(listWrap);
+        if (albums.length === 0) {
+          listWrap.append(h('div', { class: 'muted' }, 'No albums yet — create one below.'));
+          return;
+        }
+        for (const a of albums) {
+          const cb = h('input', { type: 'checkbox' }) as HTMLInputElement;
+          boxTargets.set(cb, { id: a.id, name: a.name });
+          const label = h('label', { class: 'check-row' }, cb, h('span', {}, a.name + (a.shared ? ' (shared)' : '')));
+          listWrap.append(label);
+        }
+      } catch (e) {
+        clear(listWrap);
+        listWrap.append(h('div', { class: 'muted' }, `Failed to load albums: ${String(e)}`));
+      }
+    })();
+
+    const run = async (mode: 'checked' | 'new'): Promise<void> => {
+      const photoIds = [...selection];
+      let targetNames: string[] = [];
+      const targets: string[] = [];
+      if (mode === 'new') {
+        const name = newInput.value.trim();
+        if (!name) return;
+        targetNames = [name];
+      } else {
+        for (const [b, t] of boxTargets) {
+          if (b.checked) {
+            targets.push(t.id);
+            targetNames.push(t.name);
+          }
+        }
+        if (targets.length === 0) {
+          banner(root, 'info', 'Pick at least one album (or create one below).');
+          return;
+        }
+      }
+      confirmBtn.disabled = true;
+      createAddBtn.disabled = true;
+      const label0 = confirmBtn.textContent ?? '';
+      confirmBtn.textContent = 'Adding…';
+      try {
+        if (mode === 'new') {
+          const { album } = await createAlbum({ name: targetNames[0] });
+          await albumAddPhotos(album.id, photoIds);
+        } else {
+          for (const albumId of targets) {
+            await albumAddPhotos(albumId, photoIds);
+          }
+        }
+        m.close();
+        selection.clear();
+        updateSelBar();
+        banner(root, 'success', `Added ${n} photograph${n === 1 ? '' : 's'} to ${targets.length === 1 ? targetNames[0] : `${targets.length} albums`}.`);
+        void render();
+      } catch (err) {
+        confirmBtn.disabled = false;
+        createAddBtn.disabled = false;
+        confirmBtn.textContent = label0;
+        banner(root, 'error', String(err));
+      }
+    };
+
+    confirmBtn.addEventListener('click', () => void run('checked'));
+    createAddBtn.addEventListener('click', () => void run('new'));
+  }
 
   const drop = h('div', {
     class: 'dropzone',
@@ -54,6 +224,8 @@ export function renderLibrary(root: HTMLElement): void {
   };
 
   const render = async (): Promise<void> => {
+    if (deletedView && selecting) exitSelecting();
+    pagePhotos = [];
     clear(grid);
     grid.append(h('div', { class: 'loading' }, 'Loading…'));
     try {
@@ -62,6 +234,7 @@ export function renderLibrary(root: HTMLElement): void {
         deleted: deletedView,
         limit: PAGE,
       });
+      pagePhotos = photos;
       clear(grid);
       count.textContent = deletedView
         ? `${total} deleted photograph${total === 1 ? '' : 's'}`
@@ -162,6 +335,8 @@ export function renderLibrary(root: HTMLElement): void {
 
   function photoTile(p: Photo, deleted: boolean): HTMLElement {
     const tile = h('figure', { class: 'photo-tile' });
+    const selectable = selecting && !deleted;
+    if (selectable && selection.has(p.id)) tile.classList.add('selected');
     const imgWrap = h('div', { class: 'photo-thumb' });
     imgWrap.append(h('img', { src: photoFileURL(p.id, 'thumb'), alt: p.original_name, loading: 'lazy' }));
     const figcaption = h('figcaption');
@@ -208,7 +383,23 @@ export function renderLibrary(root: HTMLElement): void {
       actions.append(download, del);
     }
 
-    tile.addEventListener('click', () => openPhotoDetail(p, () => void render(), (msg, kind) => banner(root, kind, msg)));
+    if (selectable) {
+      tile.append(h('div', { class: 'photo-check' }, selection.has(p.id) ? '✓' : ''));
+    }
+
+    tile.addEventListener('click', () => {
+      if (selectable) {
+        const now = !selection.has(p.id);
+        if (now) selection.add(p.id);
+        else selection.delete(p.id);
+        tile.classList.toggle('selected', now);
+        const check = tile.querySelector('.photo-check');
+        if (check) check.replaceChildren(now ? '✓' : '');
+        updateSelBar();
+        return;
+      }
+      openPhotoDetail(p, () => void render(), (msg, kind) => banner(root, kind, msg));
+    });
     tile.append(actions);
     return tile;
   }

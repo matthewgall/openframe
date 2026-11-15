@@ -450,6 +450,21 @@ export function albumAddPhoto(id: string, photoId: string): Promise<unknown> {
   return request('POST', `/api/v1/albums/${id}/photos`, { photo_id: photoId });
 }
 
+// Batch add (library selection bar): one round trip per album.
+export function albumAddPhotos(
+  id: string,
+  photoIds: string[],
+): Promise<{ added: number; skipped: number }> {
+  return request('POST', `/api/v1/albums/${id}/photos`, { photo_ids: photoIds });
+}
+
+// Batch delete (library selection bar).
+export function deletePhotos(
+  ids: string[],
+): Promise<{ deleted: number; skipped: number }> {
+  return request('POST', '/api/v1/photos/delete', { ids });
+}
+
 export function albumRemovePhoto(id: string, photoId: string): Promise<unknown> {
   return request('DELETE', `/api/v1/albums/${id}/photos/${photoId}`);
 }

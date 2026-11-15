@@ -136,6 +136,7 @@ func (s *Server) Router() http.Handler {
 
 			g.Get("/photos", s.handleListPhotos)
 			g.Post("/photos/upload", s.handleUpload)
+			g.Post("/photos/delete", s.handleBulkDeletePhotos)
 			g.Get("/photos/{id}", s.handleGetPhoto)
 			g.Patch("/photos/{id}", s.handleUpdatePhoto)
 			g.Delete("/photos/{id}", s.handleDeletePhoto)

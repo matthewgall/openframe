@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -169,32 +170,70 @@ func (s *Server) handleRestoreAlbum(w http.ResponseWriter, r *http.Request) {
 }
 
 type albumPhotoRequest struct {
-	PhotoID string `json:"photo_id"`
+	PhotoID  string   `json:"photo_id"`
+	PhotoIDs []string `json:"photo_ids"`
 }
 
+const maxBatchPhotos = 500
+
 // handleAlbumAddPhoto: POST /api/v1/albums/{id}/photos
-// The photo must exist and not be deleted; the stored original is
-// shared, never copied (spec §5).
+// Accepts {"photo_ids": [...]} (batch, the library selection flow) or
+// the legacy single {"photo_id": "..."}. Each photo must exist and not
+// be deleted; the stored original is shared, never copied (spec §5).
+// Adding a photo the album already contains is a no-op, counted in
+// skipped so the UI can report accurately.
 func (s *Server) handleAlbumAddPhoto(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if _, ok := s.albumPermission(w, r, id); !ok {
 		return
 	}
 	var req albumPhotoRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil || req.PhotoID == "" {
-		writeError(w, http.StatusBadRequest, "bad_request", "photo_id is required")
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256*1024)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON body")
 		return
 	}
-	if _, err := s.photoStore.Get(r.Context(), req.PhotoID); err != nil {
+	photoIDs := req.PhotoIDs
+	if len(photoIDs) == 0 && req.PhotoID != "" {
+		photoIDs = []string{req.PhotoID}
+	}
+	if len(photoIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "bad_request", "photo_id or photo_ids is required")
+		return
+	}
+	if len(photoIDs) > maxBatchPhotos {
+		writeError(w, http.StatusRequestEntityTooLarge, "too_many", fmt.Sprintf("at most %d photographs per request", maxBatchPhotos))
+		return
+	}
+
+	before, err := s.albumStore.PhotoCount(r.Context(), id)
+	if err != nil {
 		s.writeDomainError(w, err)
 		return
 	}
-	if err := s.albumStore.AddPhoto(r.Context(), id, req.PhotoID); err != nil {
+	for _, pid := range photoIDs {
+		if _, err := s.photoStore.Get(r.Context(), pid); err != nil {
+			continue // missing or already in the trash — counted below
+		}
+		if err := s.albumStore.AddPhoto(r.Context(), id, pid); err != nil {
+			s.writeDomainError(w, err)
+			return
+		}
+	}
+	after, err := s.albumStore.PhotoCount(r.Context(), id)
+	if err != nil {
 		s.writeDomainError(w, err)
 		return
 	}
-	s.audit(r, "album.photo_added", "album", id, map[string]string{"photo": req.PhotoID})
-	writeJSON(w, http.StatusOK, map[string]string{"status": "added"})
+	// Every id either created a row or didn't: skipped covers both
+	// missing/trashed photos and duplicates (AddPhoto is idempotent).
+	added := int(after - before)
+	skipped := len(photoIDs) - added
+	if len(photoIDs) == 1 {
+		s.audit(r, "album.photo_added", "album", id, map[string]string{"photo": photoIDs[0]})
+	} else {
+		s.audit(r, "album.photos_added", "album", id, map[string]any{"count": added, "skipped": skipped})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "added", "added": added, "skipped": skipped})
 }
 
 func (s *Server) handleAlbumRemovePhoto(w http.ResponseWriter, r *http.Request) {

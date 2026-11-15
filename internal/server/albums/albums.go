@@ -77,7 +77,9 @@ func (s *Store) GetIncludingDeleted(ctx context.Context, id string) (*Album, err
 func (s *Store) get(ctx context.Context, id string, includeDeleted bool) (*Album, error) {
 	q := `SELECT a.id, a.name, a.description, a.is_shared, a.cover_photo_id, a.sort_order,
 	             a.created_by, u.display_name, a.created_at, a.updated_at, a.deleted_at,
-	             (SELECT COUNT(*) FROM album_photos ap WHERE ap.album_id = a.id)
+	             (SELECT COUNT(*) FROM album_photos ap
+	                JOIN photos p ON p.id = ap.photo_id
+	               WHERE ap.album_id = a.id AND p.deleted_at IS NULL)
 	           FROM albums a JOIN users u ON u.id = a.created_by WHERE a.id = ?`
 	if !includeDeleted {
 		q += ` AND a.deleted_at IS NULL`
@@ -116,7 +118,9 @@ func (s *Store) List(ctx context.Context) ([]Album, error) {
 	rows, err := s.dbh.QueryContext(ctx,
 		`SELECT a.id, a.name, a.description, a.is_shared, a.cover_photo_id, a.sort_order,
 		        a.created_by, u.display_name, a.created_at, a.updated_at, a.deleted_at,
-		        (SELECT COUNT(*) FROM album_photos ap WHERE ap.album_id = a.id)
+		        (SELECT COUNT(*) FROM album_photos ap
+	           JOIN photos p ON p.id = ap.photo_id
+	          WHERE ap.album_id = a.id AND p.deleted_at IS NULL)
 	           FROM albums a JOIN users u ON u.id = a.created_by
 	          WHERE a.deleted_at IS NULL
 	          ORDER BY a.sort_order, a.created_at`)
@@ -256,9 +260,27 @@ func (s *Store) RemovePhoto(ctx context.Context, albumID, photoID string) error 
 }
 
 // Photos lists photo IDs in an album (ordered).
+// PhotoCount returns how many live photos an album currently holds
+// (memberships of trashed photos are kept so a restore revives them,
+// but they are not counted or listed while in the trash).
+func (s *Store) PhotoCount(ctx context.Context, albumID string) (int64, error) {
+	var n int64
+	err := s.dbh.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM album_photos ap
+		   JOIN photos p ON p.id = ap.photo_id
+		  WHERE ap.album_id = ? AND p.deleted_at IS NULL`, albumID).Scan(&n)
+	return n, err
+}
+
 func (s *Store) Photos(ctx context.Context, albumID string) ([]string, error) {
+	// Live photos only: trashed photos keep their membership (a restore
+	// revives them) but are hidden from the album while in the trash —
+	// the same rule the manifest applies for frames.
 	rows, err := s.dbh.QueryContext(ctx,
-		`SELECT photo_id FROM album_photos WHERE album_id = ? ORDER BY sort_order, added_at`, albumID)
+		`SELECT ap.photo_id FROM album_photos ap
+		   JOIN photos p ON p.id = ap.photo_id
+		  WHERE ap.album_id = ? AND p.deleted_at IS NULL
+		  ORDER BY ap.sort_order, ap.added_at`, albumID)
 	if err != nil {
 		return nil, err
 	}

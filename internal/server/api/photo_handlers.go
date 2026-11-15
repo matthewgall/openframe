@@ -280,6 +280,48 @@ func (s *Server) handleDeletePhoto(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
+// handleBulkDeletePhotos: POST /api/v1/photos/delete {"ids": [...]}
+// Soft-delete a selection in one round trip (the library selection
+// bar). Same rules as the single delete: members their own uploads,
+// admins any; photos already in the trash are counted as skipped.
+// The audit record keeps the count, not the ids (bounded detail).
+func (s *Server) handleBulkDeletePhotos(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256*1024)).Decode(&req); err != nil || len(req.IDs) == 0 {
+		writeError(w, http.StatusBadRequest, "bad_request", "ids is required")
+		return
+	}
+	if len(req.IDs) > maxBatchPhotos {
+		writeError(w, http.StatusRequestEntityTooLarge, "too_many", fmt.Sprintf("at most %d photographs per request", maxBatchPhotos))
+		return
+	}
+	u, _ := UserFrom(r.Context())
+	deleted, skipped := 0, 0
+	for _, id := range req.IDs {
+		p := s.canTouchPhoto(w, r, id)
+		if p == nil {
+			return
+		}
+		if !u.IsAdmin() && p.UploadedBy != u.ID {
+			writeError(w, http.StatusForbidden, "forbidden", "you can only delete your own photographs")
+			return
+		}
+		if p.DeletedAt != nil {
+			skipped++
+			continue
+		}
+		if err := s.photoStore.SoftDelete(r.Context(), id); err != nil {
+			s.writeDomainError(w, err)
+			return
+		}
+		deleted++
+	}
+	s.audit(r, "photo.bulk_deleted", "photo", "", map[string]any{"count": deleted, "skipped": skipped})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "deleted", "deleted": deleted, "skipped": skipped})
+}
+
 // handleRestorePhoto: POST /api/v1/photos/{id}/restore
 func (s *Server) handleRestorePhoto(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
