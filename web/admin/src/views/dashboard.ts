@@ -66,12 +66,10 @@ export function renderDashboard(root: HTMLElement): void {
           const order: DeviceStatus[] = ['online', 'sync_error', 'updating', 'update_failed', 'rollback', 'recently_seen', 'offline'];
           const parts = order.filter((k) => counts.get(k)).map((k) => `${counts.get(k)} ${k.replace('_', ' ')}`);
           kvRow(framesKv, 'Status', parts.join(' · '));
-          kvRow(framesKv, 'Total', String(active.length));
         }
-        const revokedN = dev.devices.length - active.length;
-        if (revokedN > 0) {
-          kvRow(framesKv, 'Revoked', `${revokedN} (hidden on the Frames page by default)`);
-        }
+        // No Total/Revoked rows here: the Devices stat card already
+        // carries the live count and revoked sub-line, and the status
+        // line above is itself the total.
       }
 
       clear(recentGrid);
