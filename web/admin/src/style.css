@@ -649,7 +649,7 @@ header .env { margin-left: 0; }
   gap: 1rem;
   margin-top: 0.5rem;
 }
-.album-card { padding: 0; overflow: hidden; cursor: default; }
+.album-card { padding: 0; overflow: hidden; cursor: pointer; }
 .album-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-2); border-color: color-mix(in srgb, var(--accent) 35%, var(--border-soft)); }
 .album-cover { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; display: block; background: #000; }
 .album-cover.empty {
@@ -670,12 +670,82 @@ header .env { margin-left: 0; }
 }
 .album-meta { color: var(--text-faint); font-size: 0.85rem; }
 .album-card .photo-actions { padding: 0.75rem 1rem; }
-.album-settings { margin-bottom: 0.5rem; }
-.album-photos { display: flex; flex-direction: column; gap: 0.6rem; }
-.album-photo-row { display: flex; align-items: center; gap: 0.75rem; }
-.album-photo-row img { border-radius: 8px; object-fit: cover; }
-.album-photo-row .btn { margin-left: auto; min-height: 34px; font-size: 0.85rem; }
-.album-photo-row .btn + .btn { margin-left: 0.4rem; }
+/* ---- Album detail page --------------------------------------------------
+   A full page, not a modal: the photographs get the library's grid
+   language and the settings/assignments get room to breathe. */
+.back-link {
+  display: inline-block;
+  margin-bottom: 0.75rem;
+  color: var(--text-dim);
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+.back-link:hover { color: var(--accent-2); }
+
+.album-page-head {
+  display: flex;
+  align-items: center;
+  gap: 1.1rem;
+  padding: 0.5rem 0 0.25rem;
+}
+.album-cover-lg {
+  width: 112px;
+  height: 112px;
+  border-radius: var(--radius);
+  object-fit: cover;
+  flex-shrink: 0;
+  background: #000;
+  border: 1px solid var(--border-soft);
+}
+.album-cover-lg.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(180deg, var(--panel-2), var(--panel-3));
+  color: var(--text-faint);
+}
+.album-title {
+  margin: 0 0 0.3rem;
+  font-size: 1.7rem;
+}
+.album-head-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.6rem;
+}
+
+.frame-chips { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
+.frame-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.5rem 0.3rem 0.8rem;
+  background: var(--panel-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  font-size: 0.9rem;
+}
+.chip-x {
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 1.05rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.35rem;
+  border-radius: 50%;
+}
+.chip-x:hover { color: var(--danger); background: var(--accent-dim); }
+
+/* Photo picker inside a modal: tighter tiles than the page grid. */
+.picker-grid {
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)) !important;
+  max-height: 50vh;
+  overflow-y: auto;
+  padding: 0.25rem;
+  margin-top: 0.75rem;
+}
 .row { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.75rem; }
 
 /* ---- Modal ----------------------------------------------------------------------------- */

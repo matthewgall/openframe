@@ -1,5 +1,5 @@
 import {
-  albumAddPhoto,
+  albumAddPhotos,
   currentUser,
   albumAssignDevice,
   albumRemovePhoto,
@@ -12,9 +12,9 @@ import {
   listDevices,
   listPhotos,
   photoFileURL,
-  restoreAlbum,
   updateAlbum,
   type Album,
+  type Photo,
 } from '../api';
 import { banner, clear, confirmAction, emptyState, formatDateTime, h, openModal } from '../components';
 
@@ -44,7 +44,7 @@ export function renderAlbums(root: HTMLElement): void {
         );
         return;
       }
-      for (const a of albums) grid.append(albumCard(a, render));
+      for (const a of albums) grid.append(albumCard(a));
     } catch (err) {
       clear(grid);
       grid.append(h('div', { class: 'muted' }, `Failed to load: ${String(err)}`));
@@ -85,7 +85,7 @@ export function renderAlbums(root: HTMLElement): void {
 
   void render();
 
-  function albumCard(a: Album, rerender: () => Promise<void>): HTMLElement {
+  function albumCard(a: Album): HTMLElement {
     const card = h('div', { class: 'card album-card' });
     const cover = a.cover_thumb_url
       ? h('img', { class: 'album-cover', src: a.cover_thumb_url, alt: '' })
@@ -99,252 +99,364 @@ export function renderAlbums(root: HTMLElement): void {
       ),
     );
     card.append(cover, head);
-
-    const actions = h('div', { class: 'photo-actions' });
-    const manage = h('button', { class: 'btn', type: 'button' }, 'Manage');
-    manage.addEventListener('click', () =>
-      openAlbumDetail(a, async () => {
-        await rerender();
-      }, (msg, kind) => banner(root, kind, msg)));
-    void rerender;
-    actions.append(manage);
-    card.append(actions);
+    // The whole card is the affordance — it opens the album's page.
+    card.addEventListener('click', () => {
+      location.hash = `album/${a.id}`;
+    });
     return card;
   }
 }
 
-function openAlbumDetail(
-  a: Album,
-  rerender: () => Promise<void>,
-  notify: (msg: string, kind: 'info' | 'error' | 'success') => void,
-): void {
+
+// ---------------------------------------------------------------------------
+// Album detail page (#album/{id}) — a real page, not a modal: the photo
+// grid gets the same language as the library, and there is room for the
+// picker, the frame assignments and the settings to breathe.
+// ---------------------------------------------------------------------------
+
+export function renderAlbumDetail(root: HTMLElement, albumId: string): void {
   const me = currentUser();
   const isAdmin = me?.role === 'admin';
-  const isCreator = me?.id === a.created_by;
-  const canManage = isAdmin || isCreator || a.shared;
+  let album: Album | null = null;
+  let canManage = false;
+  let currentPhotoIds: string[] = [];
 
-  const m = openModal(a.name, () => void rerender());
-  const info = h('div', { class: 'card' });
-  const nameInput = h('input', { class: 'input', type: 'text', value: a.name });
-  const descInput = h('input', { class: 'input', type: 'text', value: a.description ?? '', placeholder: 'Description' });
-  const sharedBox = h('input', { type: 'checkbox' });
-  if (a.shared) sharedBox.checked = true;
-  const settings = h('div', { class: 'album-settings' });
-  settings.append(
-    h('div', { class: 'field' }, h('label', {}, 'Name'), nameInput),
-    h('div', { class: 'field' }, h('label', {}, 'Description'), descInput),
-    h('div', { class: 'field check' }, sharedBox, h('label', {}, 'Shared with all members')),
-  );
-  const saveBtn = h('button', { class: 'btn primary', type: 'button' }, 'Save settings');
-  saveBtn.addEventListener('click', async () => {
-    try {
-      await updateAlbum(a.id, {
-        name: nameInput.value.trim(),
-        description: descInput.value.trim(),
-        shared: sharedBox.checked,
-      });
-      notify('Album saved.', 'success');
-    } catch (e) {
-      notify(String(e), 'error');
-    }
-  });
-  if (isAdmin || isCreator) {
-    settings.append(h('div', { class: 'modal-actions' }, saveBtn));
+  const back = h('a', { href: '#albums', class: 'back-link' }, '← Albums');
+  const head = h('div', { class: 'album-page-head' });
+  head.append(h('div', { class: 'loading' }, 'Loading…'));
+  const gridWrap = h('div', { style: 'margin-top:1rem' }, h('div', { class: 'loading' }, 'Loading photographs…'));
+  const framesCard = h('div', { class: 'card', style: 'margin-top:1rem' });
+  root.append(back, head, gridWrap);
+
+  const notify = (msg: string, kind: 'info' | 'error' | 'success'): void => banner(root, kind, msg);
+
+  // --- photo viewer -------------------------------------------------------
+  function openViewer(pid: string): void {
+    const m = openModal('Photograph');
+    const img = h('img', { src: photoFileURL(pid, 'display'), alt: '' });
+    img.addEventListener('click', () => {
+      img.src = photoFileURL(pid, img.src.includes('display') ? 'original' : 'display');
+    });
+    m.body.append(h('div', { class: 'detail-viewer' }, img));
   }
 
-  const delBtn = h('button', { class: 'btn ghost danger-text', type: 'button' }, 'Delete album');
-  delBtn.addEventListener('click', async () => {
+  // --- one photo tile inside the album (library language) -----------------
+  function albumPhotoTile(pid: string): HTMLElement {
+    const tile = h('figure', { class: 'photo-tile' });
+    tile.append(
+      h('div', { class: 'photo-thumb' }, h('img', { src: photoFileURL(pid, 'thumb'), alt: '', loading: 'lazy' })),
+    );
+    const actions = h('div', { class: 'photo-actions' });
+    const view = h('button', { class: 'btn ghost', type: 'button' }, 'View');
+    view.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openViewer(pid);
+    });
+    actions.append(view);
+    if (canManage) {
+      const cover = h('button', { class: 'btn ghost', type: 'button' }, album?.cover_photo_id === pid ? 'Cover ✓' : 'Cover');
+      cover.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        try {
+          await albumSetCover(album!.id, pid);
+          album!.cover_photo_id = pid;
+          notify('Cover updated.', 'success');
+          void load();
+        } catch (err) {
+          notify(String(err), 'error');
+        }
+      });
+      const remove = h('button', { class: 'btn ghost danger-text', type: 'button' }, 'Remove');
+      remove.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        try {
+          await albumRemovePhoto(album!.id, pid);
+          notify('Photograph removed from album.', 'success');
+          void load();
+        } catch (err) {
+          notify(String(err), 'error');
+        }
+      });
+      actions.append(cover, remove);
+    }
+    tile.append(actions);
+    tile.addEventListener('click', () => openViewer(pid));
+    return tile;
+  }
+
+  function buildGrid(photoIds: string[]): HTMLElement {
+    const grid = h('div', { class: 'photo-grid' });
+    if (photoIds.length === 0) {
+      grid.append(
+        emptyState({
+          icon: 'photo',
+          title: 'No photographs in this album yet',
+          body: canManage
+            ? 'Add photographs from the library — they will show up on assigned frames.'
+            : 'Photographs added by the album owner will appear here.',
+          action: canManage ? { label: 'Add photographs', onClick: () => openPicker(() => void load()) } : undefined,
+        }),
+      );
+      return grid;
+    }
+    for (const pid of photoIds) grid.append(albumPhotoTile(pid));
+    return grid;
+  }
+
+  // --- add-from-library picker (grid + search, batch add) ------------------
+  function openPicker(onDone: () => void): void {
+    const m = openModal(`Add to “${album?.name ?? 'album'}”`);
+    const search = h('input', { class: 'input', type: 'search', placeholder: 'Filter by filename…', 'aria-label': 'Filter photographs' });
+    const grid = h('div', { class: 'photo-grid picker-grid' });
+    const countEl = h('span', { class: 'sel-count' }, '0 selected');
+    const selAllBtn = h('button', { class: 'btn ghost', type: 'button' }, 'Select all');
+    const addBtn = h('button', { class: 'btn primary', type: 'button' }, 'Add');
+    const cancelBtn = h('button', { class: 'btn ghost', type: 'button' }, 'Cancel');
+    cancelBtn.addEventListener('click', () => m.close());
+
+    const selection = new Set<string>();
+    let candidates: Photo[] = [];
+    let libraryEmpty = false;
+
+    const visible = (): Photo[] => {
+      const q = search.value.trim().toLowerCase();
+      return candidates.filter((p) => !q || p.original_name.toLowerCase().includes(q));
+    };
+
+    const renderTiles = (): void => {
+      clear(grid);
+      const vis = visible();
+      if (vis.length === 0) {
+        grid.append(
+          emptyState({
+            icon: candidates.length === 0 ? 'photo' : 'search',
+            compact: true,
+            title: candidates.length === 0 ? 'Nothing to add' : 'No matches',
+            body: candidates.length === 0
+              ? libraryEmpty
+                ? 'No photographs in the library yet — upload some first.'
+                : 'All photographs are already in this album.'
+              : `No photographs match “${search.value.trim()}”.`,
+          }),
+        );
+        return;
+      }
+      for (const p of vis) {
+        const tile = h('figure', { class: 'photo-tile' });
+        if (selection.has(p.id)) tile.classList.add('selected');
+        tile.append(
+          h('div', { class: 'photo-thumb' }, h('img', { src: photoFileURL(p.id, 'thumb'), alt: p.original_name, loading: 'lazy' })),
+          h('div', { class: 'photo-check' }, selection.has(p.id) ? '✓' : ''),
+        );
+        tile.addEventListener('click', () => {
+          if (selection.has(p.id)) selection.delete(p.id);
+          else selection.add(p.id);
+          countEl.textContent = `${selection.size} selected`;
+          renderTiles();
+        });
+        grid.append(tile);
+      }
+    };
+
+    grid.append(h('div', { class: 'loading' }, 'Loading…'));
+    void (async () => {
+      try {
+        const { photos } = await listPhotos({ limit: 500 });
+        libraryEmpty = photos.length === 0;
+        const inAlbum = new Set(currentPhotoIds);
+        candidates = photos.filter((p) => !inAlbum.has(p.id));
+        renderTiles();
+      } catch (e) {
+        clear(grid);
+        grid.append(h('div', { class: 'muted' }, `Failed to load: ${String(e)}`));
+      }
+    })();
+
+    search.addEventListener('input', renderTiles);
+    selAllBtn.addEventListener('click', () => {
+      const vis = visible();
+      const all = vis.length > 0 && vis.every((p) => selection.has(p.id));
+      for (const p of vis) {
+        if (all) selection.delete(p.id);
+        else selection.add(p.id);
+      }
+      countEl.textContent = `${selection.size} selected`;
+      renderTiles();
+    });
+
+    m.body.append(
+      search,
+      grid,
+      h('div', { class: 'modal-actions' }, countEl, selAllBtn, addBtn, cancelBtn),
+    );
+
+    addBtn.addEventListener('click', async () => {
+      if (selection.size === 0) return;
+      addBtn.disabled = true;
+      const label = addBtn.textContent ?? '';
+      addBtn.textContent = 'Adding…';
+      try {
+        const res = await albumAddPhotos(album!.id, [...selection]);
+        m.close();
+        notify(`Added ${res.added} photograph${res.added === 1 ? '' : 's'} to the album.`, 'success');
+        onDone();
+      } catch (e) {
+        addBtn.disabled = false;
+        addBtn.textContent = label;
+        notify(String(e), 'error');
+      }
+    });
+  }
+
+  // --- settings -------------------------------------------------------------
+  function openEdit(): void {
+    if (!album) return;
+    const m = openModal('Edit album');
+    const name = h('input', { class: 'input', type: 'text', value: album.name });
+    const desc = h('input', { class: 'input', type: 'text', value: album.description ?? '', placeholder: 'Description (optional)' });
+    const shared = h('input', { type: 'checkbox' });
+    shared.checked = album.shared;
+    const errEl = h('div', { class: 'muted' });
+    const save = h('button', { class: 'btn primary', type: 'button' }, 'Save');
+    save.addEventListener('click', async () => {
+      try {
+        await updateAlbum(album!.id, {
+          name: name.value.trim(),
+          description: desc.value.trim(),
+          shared: shared.checked,
+        });
+        m.close();
+        notify('Album saved.', 'success');
+        void load();
+      } catch (e) {
+        errEl.textContent = String(e);
+      }
+    });
+    m.body.append(
+      h('div', { class: 'field' }, h('label', {}, 'Name'), name),
+      h('div', { class: 'field' }, h('label', {}, 'Description'), desc),
+      h('div', { class: 'field check' }, shared, h('label', {}, 'Shared with all members (off = private to you)')),
+      errEl,
+      h('div', { class: 'modal-actions' }, save),
+    );
+  }
+
+  async function delAlbum(): Promise<void> {
     const yes = await confirmAction(
-      `Delete album "${a.name}"? Photographs are not removed — only the album and its assignments.`,
+      `Delete album “${album?.name}”? Photographs are not removed — only the album and its frame assignments.`,
       'Delete',
     );
     if (!yes) return;
     try {
-      await deleteAlbum(a.id);
-      notify('Album deleted (recoverable).', 'success');
-      m.close();
-      await rerender();
+      await deleteAlbum(album!.id);
+      notify('Album deleted.', 'success');
+      location.hash = 'albums';
     } catch (e) {
       notify(String(e), 'error');
     }
-  });
-  const restoreBtn = h('button', { class: 'btn ghost', type: 'button' }, 'Restore album');
-  restoreBtn.addEventListener('click', async () => {
-    try {
-      await restoreAlbum(a.id);
-      notify('Album restored.', 'success');
-      m.close();
-      await rerender();
-    } catch (e) {
-      notify(String(e), 'error');
-    }
-  });
-  info.append(settings, h('div', { class: 'modal-actions' }, delBtn, restoreBtn));
-  m.body.append(info);
-
-  // Photos in the album.
-  const listWrap = h('div', { class: 'card', style: 'margin-top:1rem' });
-  listWrap.append(h('h2', {}, 'Photographs'));
-  const photosWrap = h('div', { class: 'album-photos' });
-  listWrap.append(photosWrap);
-  m.body.append(listWrap);
-
-  const addWrap = h('div', { class: 'card', style: 'margin-top:1rem' });
-  addWrap.append(h('h2', {}, 'Add photographs'));
-  const picker = h('select', { class: 'input' });
-  const addBtn = h('button', { class: 'btn', type: 'button' }, 'Add');
-  if (canManage) {
-    addWrap.append(picker, addBtn);
-    m.body.append(addWrap);
   }
 
-  // Frame assignment (admin).
-  const frameWrap = h('div', { class: 'card', style: 'margin-top:1rem' });
-  frameWrap.append(h('h2', {}, 'Assigned frames'));
-  const framesList = h('div');
-  frameWrap.append(framesList);
-  const devSel = h('select', { class: 'input' });
-  const assignBtn = h('button', { class: 'btn', type: 'button' }, 'Assign');
-  const unSel = h('select', { class: 'input' });
-  const unassignBtn = h('button', { class: 'btn ghost', type: 'button' }, 'Unassign');
-  if (isAdmin) {
-    frameWrap.append(h('div', { class: 'row' }, devSel, assignBtn, unSel, unassignBtn));
-    m.body.append(frameWrap);
+  // --- frame assignments (admin) ---------------------------------------------
+  async function buildFramesCard(assignedIds: string[]): Promise<void> {
+    framesCard.replaceChildren(h('h2', {}, 'Assigned frames'));
+    let devices: Array<{ id: string; name: string; revoked_at?: string }> = [];
+    try {
+      const { devices: d } = await listDevices();
+      devices = d;
+    } catch {
+      // Non-fatal: the assignment controls still work by id.
+    }
+    if (assignedIds.length === 0) {
+      framesCard.append(
+        h('div', { class: 'muted' }, 'Not assigned to any frame yet — a frame only shows albums assigned to it.'),
+      );
+    }
+    const chips = h('div', { class: 'frame-chips' });
+    for (const did of assignedIds) {
+      const dev = devices.find((d) => d.id === did);
+      const chip = h('span', { class: 'frame-chip' }, dev?.name ?? did);
+      const x = h('button', { class: 'chip-x', type: 'button', 'aria-label': `Unassign ${dev?.name ?? did}` }, '×');
+      x.addEventListener('click', async () => {
+        try {
+          await albumUnassignDevice(album!.id, did);
+          void load();
+        } catch (e) {
+          notify(String(e), 'error');
+        }
+      });
+      chip.append(x);
+      chips.append(chip);
+    }
+    if (chips.childElementCount > 0) framesCard.append(chips);
 
+    const row = h('div', { class: 'row', style: 'margin-top:0.75rem' });
+    const devSel = h('select', { class: 'input', 'aria-label': 'Frame to assign' });
+    const unassigned = devices.filter((d) => !d.revoked_at && !assignedIds.includes(d.id));
+    if (unassigned.length === 0) {
+      devSel.append(h('option', {}, 'No other active frames'));
+      devSel.disabled = true;
+    }
+    for (const d of unassigned) devSel.append(h('option', { value: d.id }, d.name));
+    const assignBtn = h('button', { class: 'btn', type: 'button' }, 'Assign frame');
     assignBtn.addEventListener('click', async () => {
       if (!devSel.value) return;
       try {
-        await albumAssignDevice(a.id, devSel.value);
-        notify('Frame assigned.', 'success');
+        await albumAssignDevice(album!.id, devSel.value);
         void load();
       } catch (e) {
         notify(String(e), 'error');
       }
     });
-    unassignBtn.addEventListener('click', async () => {
-      if (!unSel.value) return;
-      try {
-        await albumUnassignDevice(a.id, unSel.value);
-        notify('Frame unassigned.', 'success');
-        void load();
-      } catch (e) {
-        notify(String(e), 'error');
-      }
-    });
+    row.append(devSel, assignBtn);
+    framesCard.append(row);
   }
 
-  const load = async (): Promise<void> => {
+  // --- load --------------------------------------------------------------------
+  async function load(): Promise<void> {
     try {
-      const detail = await getAlbum(a.id);
-      const photos = detail.photos ?? [];
+      const detail = await getAlbum(albumId);
+      album = detail.album;
+      canManage = isAdmin || me?.id === album.created_by || album.shared;
+      currentPhotoIds = detail.photos ?? [];
 
-      clear(photosWrap);
-      if (photos.length === 0) {
-        photosWrap.append(
-          emptyState({
-            icon: 'photo',
-            compact: true,
-            title: 'No photographs in this album yet',
-            body: canManage
-              ? 'Use the picker below to add photographs from the library.'
-              : 'Photographs added to this album by its owner will appear here.',
-          }),
-        );
-      }
-      for (const pid of photos) {
-        const row = h('div', { class: 'album-photo-row' });
-        row.append(h('img', { src: photoFileURL(pid, 'thumb'), alt: '', width: '72', height: '72' }));
-        if (canManage) {
-          const setCover = h('button', { class: 'btn ghost', type: 'button' }, a.cover_photo_id === pid ? 'Cover ✓' : 'Cover');
-          setCover.addEventListener('click', async () => {
-            try {
-              await albumSetCover(a.id, pid);
-              a.cover_photo_id = pid;
-              notify('Cover updated.', 'success');
-              void load();
-            } catch (e) {
-              notify(String(e), 'error');
-            }
-          });
-          const remove = h('button', { class: 'btn ghost danger-text', type: 'button' }, 'Remove');
-          remove.addEventListener('click', async () => {
-            try {
-              await albumRemovePhoto(a.id, pid);
-              notify('Photograph removed from album.', 'success');
-              void load();
-            } catch (e) {
-              notify(String(e), 'error');
-            }
-          });
-          row.append(setCover, remove);
-        }
-        photosWrap.append(row);
-      }
-
-      // Picker of live photos not yet in the album.
+      // Header.
+      const actions = h('div', { class: 'album-head-actions' });
       if (canManage) {
-        const { photos: all } = await listPhotos({ limit: 500 });
-        clear(picker);
-        const options = all.filter((p) => !photos.includes(p.id));
-        if (options.length === 0) {
-          const msg = all.length === 0
-            ? 'No photographs in the library yet — upload some first'
-            : 'All photographs are in this album';
-          picker.append(h('option', {}, msg));
-          picker.disabled = true;
-        }
-        for (const p of options) {
-          picker.append(h('option', { value: p.id }, `${p.original_name} (${p.width}×${p.height})`));
-        }
+        const add = h('button', { class: 'btn primary', type: 'button' }, 'Add photographs');
+        add.addEventListener('click', () => openPicker(() => void load()));
+        actions.append(add);
       }
+      if (isAdmin || me?.id === album.created_by) {
+        const edit = h('button', { class: 'btn ghost', type: 'button' }, 'Edit');
+        edit.addEventListener('click', openEdit);
+        const del = h('button', { class: 'btn ghost danger-text', type: 'button' }, 'Delete');
+        del.addEventListener('click', () => void delAlbum());
+        actions.append(edit, del);
+      }
+      head.replaceChildren(
+        album.cover_thumb_url
+          ? h('img', { class: 'album-cover-lg', src: album.cover_thumb_url, alt: '' })
+          : h('div', { class: 'album-cover-lg empty' }),
+        h('div', {},
+          h('h1', { class: 'album-title' }, album.name),
+          h('div', { class: 'album-meta' },
+            h('span', { class: 'pill ' + (album.shared ? 'ok' : 'warn') }, album.shared ? 'shared' : 'private'),
+            ` · ${currentPhotoIds.length} photo${currentPhotoIds.length === 1 ? '' : 's'} · by ${album.creator_name ?? 'unknown'} · updated ${formatDateTime(album.updated_at)}`),
+          actions,
+        ),
+      );
 
-      // Frames.
+      gridWrap.replaceChildren(buildGrid(currentPhotoIds));
+
       if (isAdmin) {
-        const { devices } = await listDevices();
-        clear(framesList);
-        const assigned = detail.devices ?? [];
-        if (assigned.length === 0) {
-          framesList.append(h('div', { class: 'muted' }, 'Not assigned to any frame yet.'));
-        }
-        for (const did of assigned) {
-          const dev = devices.find((d) => d.id === did);
-          framesList.append(h('div', {}, `🖥 ${dev?.name ?? did}`));
-        }
-        clear(devSel);
-        clear(unSel);
-        let active = 0;
-        for (const d of devices) {
-          // Revocation is terminal (a revoked frame can never receive
-          // a credential again), so it is never offered for assignment
-          // — and the server strips any stale assignment on revoke.
-          if (d.revoked_at) continue;
-          active++;
-          devSel.append(h('option', { value: d.id }, d.name));
-          if (assigned.includes(d.id)) {
-            unSel.append(h('option', { value: d.id }, d.name));
-          }
-        }
-        if (active === 0) {
-          devSel.append(h('option', {}, 'No active frames'));
-          devSel.disabled = true;
-        }
+        if (!root.contains(framesCard)) root.append(framesCard);
+        void buildFramesCard(detail.devices ?? []);
       }
     } catch (e) {
-      clear(photosWrap);
-      photosWrap.append(h('div', { class: 'muted' }, `Failed to load: ${String(e)}`));
+      head.replaceChildren(h('div', { class: 'banner error' }, `Could not load album: ${String(e)}`));
+      gridWrap.replaceChildren();
     }
-  };
-
-  addBtn.addEventListener('click', async () => {
-    if (!picker.value) return;
-    try {
-      await albumAddPhoto(a.id, picker.value);
-      notify('Photograph added to album.', 'success');
-      void load();
-    } catch (e) {
-      notify(String(e), 'error');
-    }
-  });
+  }
 
   void load();
 }

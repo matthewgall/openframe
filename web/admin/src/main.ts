@@ -1,7 +1,7 @@
 import './style.css';
 import { ApiError, changePassword, currentUser, login, logout, refreshMe, updateProfile } from './api';
 import { h } from './components';
-import { renderAlbums } from './views/albums';
+import { renderAlbums, renderAlbumDetail } from './views/albums';
 import { renderAudit } from './views/audit';
 import { renderDashboard } from './views/dashboard';
 import { renderFrames } from './views/frames';
@@ -209,6 +209,14 @@ function renderApp(root: HTMLElement, onUnauthed: () => void): void {
   root.append(layout);
 
   const show = (id: string): void => {
+    // Album detail is a sub-route (#album/{id}) of the Albums section:
+    // it gets its own page header (loaded async) and highlights Albums.
+    if (id.startsWith('album/')) {
+      main.replaceChildren();
+      renderAlbumDetail(main, id.slice('album/'.length));
+      highlightNav('albums');
+      return;
+    }
     const section = sections.find((s) => s.id === id);
     if (!section) return;
     if (section.adminOnly && me?.role !== 'admin') {
@@ -218,8 +226,12 @@ function renderApp(root: HTMLElement, onUnauthed: () => void): void {
     main.replaceChildren();
     main.append(h('h1', {}, section.title));
     section.render(main);
+    highlightNav(id);
+  };
+
+  const highlightNav = (activeId: string): void => {
     for (const a of nav.querySelectorAll('a')) {
-      if (a.getAttribute('href') === `#${id}`) a.setAttribute('aria-current', 'page');
+      if (a.getAttribute('href') === `#${activeId}`) a.setAttribute('aria-current', 'page');
       else a.removeAttribute('aria-current');
     }
   };
@@ -230,19 +242,26 @@ function renderApp(root: HTMLElement, onUnauthed: () => void): void {
     nav.append(h('a', { href: `#${s.id}` }, s.title));
   }
 
+  // Hash navigation: back links, album cards and browser back/forward
+  // all work through the native hashchange event.
+  const navigate = (id: string): void => {
+    const isSection = sections.some((s) => s.id === id);
+    if (isSection || id.startsWith('album/')) show(id);
+  };
+  window.addEventListener('hashchange', () => {
+    navigate(location.hash.slice(1) || 'dashboard');
+  });
   nav.addEventListener('click', (e) => {
     const a = (e.target as HTMLElement).closest('a');
     if (!a) return;
     e.preventDefault();
     const id = a.getAttribute('href')?.slice(1);
-    if (id) {
-      history.replaceState(null, '', `#${id}`);
-      show(id);
-    }
+    if (id) navigate(id);
   });
 
   const initial = location.hash.slice(1) || 'dashboard';
-  show(sections.some((s) => s.id === initial) ? initial : 'dashboard');
+  const valid = sections.some((s) => s.id === initial) || initial.startsWith('album/');
+  show(valid ? initial : 'dashboard');
 }
 
 // --- Root -------------------------------------------------------------------------
