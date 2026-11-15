@@ -292,6 +292,14 @@ func (f *Frame) sleepComponent(ctx context.Context) error {
 			return nil
 		case now := <-ticker.C:
 			asleep := f.ui.schedule().IsAsleep(now)
+			// An unpaired frame never sleeps: the pairing/setup screen
+			// is the only thing on display, and the owner pairing it
+			// may well be standing in front of it at night. Hiding the
+			// code behind the sleep schedule made pairing impossible
+			// outside the wake window.
+			if !f.engine.Paired() {
+				asleep = false
+			}
 			if asleep == f.ui.asleep {
 				continue
 			}

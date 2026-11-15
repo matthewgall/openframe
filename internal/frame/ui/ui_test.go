@@ -548,6 +548,58 @@ func TestEmptyStates(t *testing.T) {
 	env2.eng.render()
 }
 
+// TestSetupScreensCentreText guards the unpaired setup screen and the
+// pairing screen against the old hard-coded "w/2-N" centring offsets,
+// which assumed a text width and skewed every block off-centre (and
+// clipped long lines on 800px frames). The rendered ink must have
+// equal left and right margins.
+func TestSetupScreensCentreText(t *testing.T) {
+	check := func(name string, env *uiEnv, setup func(*Engine)) {
+		t.Helper()
+		e := env.eng
+		if setup != nil {
+			setup(e)
+		}
+		e.Reload(context.Background())
+		e.render()
+		img := e.cv.Image()
+		bg := img.At(0, 0)
+		left, right := img.Rect.Dx(), -1
+		for y := 0; y < img.Rect.Dy(); y++ {
+			for x := 0; x < img.Rect.Dx(); x++ {
+				if img.At(x, y) != bg {
+					if x < left {
+						left = x
+					}
+					if x > right {
+						right = x
+					}
+				}
+			}
+		}
+		if right < 0 {
+			t.Fatalf("%s: no ink rendered", name)
+		}
+		lm, rm := left, img.Rect.Dx()-1-right
+		// Tolerance: Font.Width() counts full glyph cells (advance
+		// width) but a line's ink ends inside its last cell, so the
+		// ink bounds can be off by up to one cell of the widest font
+		// on screen (the 56px pairing-code font). The original bug
+		// was ~100-180px off — well outside this.
+		if d := lm - rm; d > 64 || d < -64 {
+			t.Errorf("%s: text block not centred (left margin %d, right margin %d)", name, lm, rm)
+		}
+	}
+
+	envUnpaired := newUIEnv(t, nil, nil)
+	envUnpaired.data.info.Paired = false
+	check("unpaired setup screen", envUnpaired, nil)
+
+	envPairing := newUIEnv(t, nil, nil)
+	envPairing.data.info.Paired = false
+	check("pairing screen", envPairing, func(e *Engine) { e.SetPairing("ABCD-EFGH") })
+}
+
 func TestThrottleDoublesInterval(t *testing.T) {
 	photos := testPhotos(t, 1)
 	env := newUIEnv(t, photos, nil)

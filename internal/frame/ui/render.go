@@ -89,7 +89,7 @@ func (e *Engine) renderSlideshow() {
 		// Placeholder tile for an undecodable file.
 		e.cv.Fill(colBg)
 		e.cv.FillRect(e.w/2-160, e.h/2-40, 320, 80, color.NRGBA{40, 40, 40, 255})
-		e.cv.Font(fontBody).DrawText(e.cv.Image(), e.w/2-140, e.h/2-12, "image unavailable", colDim)
+		e.drawCentered(fontBody, e.h/2-12, "image unavailable", colDim)
 	}
 
 	// Optional clock (top right).
@@ -184,6 +184,15 @@ func (e *Engine) drawControls(p *Photo) {
 	}
 }
 
+// drawCentered blits s horizontally centred on the canvas at row y,
+// computed from the font's actual advance width. (The old code used
+// hand-measured "w/2-280" style offsets that assumed a text width and
+// left blocks skewed on every screen size the assumption missed.)
+func (e *Engine) drawCentered(scale int, y int, s string, col color.NRGBA) {
+	f := e.cv.Font(scale)
+	e.cv.Font(scale).DrawText(e.cv.Image(), (e.w-f.Width(s))/2, y, s, col)
+}
+
 func (e *Engine) renderEmpty() {
 	// Clear loading/error state (spec §10).
 	info := e.data.Info(context.Background())
@@ -194,17 +203,21 @@ func (e *Engine) renderEmpty() {
 			e.renderPairing()
 			return
 		}
-		e.cv.Font(fontBody).DrawText(e.cv.Image(), e.w/2-280, e.h/2, "This frame is not set up yet.", colDim)
-		e.cv.Font(fontBody).DrawText(e.cv.Image(), e.w/2-280, e.h/2+40, "Pair it from the admin console (Frames → Pending pairing),", colDim)
-		e.cv.Font(fontBody).DrawText(e.cv.Image(), e.w/2-280, e.h/2+80, "or set a credential manually (openframe pair).", colDim)
+		e.drawCentered(fontBody, e.h/2-14, "This frame is not set up yet.", colDim)
+		e.drawCentered(fontBody, e.h/2+26, "Pair it in the admin console (Frames -> Pending pairing)", colDim)
+		e.drawCentered(fontBody, e.h/2+50, "or set a credential manually (openframe pair).", colDim)
 		return
 	}
 	f := e.cv.Font(fontTitle)
 	msg := "No photos yet"
 	e.cv.Font(fontTitle).DrawText(e.cv.Image(), (e.w-f.Width(msg))/2, e.h/2-80, msg, colText)
-	e.cv.Font(fontBody).DrawText(e.cv.Image(), e.w/2-200, e.h/2, "Waiting for the first synchronisation…", colDim)
+	e.drawCentered(fontBody, e.h/2, "Waiting for the first synchronisation", colDim)
 	if info.LastSyncError != "" {
-		e.cv.Font(fontBody).DrawText(e.cv.Image(), e.w/2-320, e.h/2+40, "Last sync error: "+truncate(info.LastSyncError, 50), colDim)
+		// Fit the error to the screen instead of a fixed 50 chars.
+		f := e.cv.Font(fontBody)
+		prefix := "Last sync error: "
+		maxRunes := (e.w-2*margin)/f.CellW() - len(prefix)
+		e.drawCentered(fontBody, e.h/2+40, prefix+truncate(info.LastSyncError, maxRunes), colDim)
 	}
 }
 
@@ -216,13 +229,13 @@ func (e *Engine) renderPairing() {
 	title := "Pair this frame"
 	e.cv.Font(fontTitle).DrawText(e.cv.Image(), (e.w-e.cv.Font(fontTitle).Width(title))/2, e.h/2-150, title, colText)
 
-	e.cv.Font(fontBody).DrawText(e.cv.Image(), e.w/2-340, e.h/2-90, "Enter this code in the OpenFrame admin console:", colDim)
+	e.drawCentered(fontBody, e.h/2-90, "Enter this code in the OpenFrame admin console:", colDim)
 
 	code := e.pairingCode
 	e.cv.Font(8).DrawText(e.cv.Image(), (e.w-codeFont.Width(code))/2, e.h/2-60, code, colText)
 
-	e.cv.Font(fontBody).DrawText(e.cv.Image(), e.w/2-300, e.h/2+70, "The code is single-use and expires in 15 minutes.", colDim)
-	e.cv.Font(fontBody).DrawText(e.cv.Image(), e.w/2-260, e.h/2+110, "Photos start arriving as soon as it is approved.", colDim)
+	e.drawCentered(fontBody, e.h/2+70, "The code is single-use and expires in 15 minutes.", colDim)
+	e.drawCentered(fontBody, e.h/2+110, "Photos start arriving as soon as it is approved.", colDim)
 }
 
 func (e *Engine) renderDetails() {
@@ -408,7 +421,7 @@ func (e *Engine) renderSearch() {
 	}
 	e.cv.Font(fontTitle).DrawText(e.cv.Image(), margin, margin, title+"  (tap to change)", colText)
 	if e.filterChar != 0 {
-		e.cv.Font(fontBody).DrawText(e.cv.Image(), e.w/2-80, margin+52,
+		e.drawCentered(fontBody, margin+52,
 			fmt.Sprintf("filtering: %c   (tap again to clear)", e.filterChar), colAccent)
 	}
 
