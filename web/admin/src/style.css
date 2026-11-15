@@ -474,6 +474,12 @@ header .env { margin-left: 0; }
   flex-wrap: wrap;
   justify-content: center;
 }
+/* The author-level `display: flex` above would otherwise override the
+   UA `[hidden]` rule, leaving an empty '0 selected' bar permanently
+   pinned over the grid (it blocked taps on photos, worst on mobile).
+   Keep hidden working. */
+.sel-bar[hidden] { display: none; }
+
 .sel-count {
   font-family: var(--font-display);
   font-weight: 600;
