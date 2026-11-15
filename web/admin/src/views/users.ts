@@ -150,6 +150,11 @@ export function renderUsers(root: HTMLElement): void {
 
     const sessions = h('button', { class: 'btn ghost', type: 'button' }, 'Revoke sessions');
     sessions.addEventListener('click', async () => {
+      const yes = await confirmAction(
+        `Revoke every session for ${u.email}? They are signed out immediately on all devices.`,
+        'Revoke sessions',
+      );
+      if (!yes) return;
       try {
         const res = await revokeUserSessions(u.id);
         banner(root, 'success', `Revoked ${res.revoked} session${res.revoked === 1 ? '' : 's'} for ${u.email}.`);

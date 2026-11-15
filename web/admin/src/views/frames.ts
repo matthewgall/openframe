@@ -228,6 +228,18 @@ export function renderFrames(root: HTMLElement): void {
       issue.addEventListener('click', () => {
         void (async () => {
           try {
+            // Rotating an EXISTING credential is destructive: the frame's
+            // current credential dies immediately and the new one is shown
+            // only once — miss it and the frame is orphaned until someone
+            // physically reaches it. Confirm; first-time issue doesn't
+            // break anything and needs no gate.
+            if (d.has_credential) {
+              const yes = await confirmAction(
+                `Rotate the credential for "${d.name}"? Its current credential stops working immediately — the frame stops syncing until you re-pair it with the new one. The new credential is shown only once.`,
+                'Rotate credential',
+              );
+              if (!yes) return;
+            }
             const cred = await issueDeviceCredential(d.id);
             credentialModal(cred.token, d);
           } catch (e) {
