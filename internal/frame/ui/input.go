@@ -89,7 +89,14 @@ func (e *Engine) onSwipe(dir touch.Dir) {
 		e.clampSearch()
 		e.render()
 	case ScreenSettings:
-		if dir == touch.DirRight {
+		switch dir {
+		case touch.DirUp:
+			e.settingsTop -= 3
+			e.render()
+		case touch.DirDown:
+			e.settingsTop += 3
+			e.render()
+		case touch.DirRight:
 			e.goGallery()
 			e.render()
 		}
@@ -194,6 +201,7 @@ func (e *Engine) doButton(kind int, b hitButton) {
 	case btnSettings:
 		e.staged = e.effectiveSettings()
 		e.screen = ScreenSettings
+		e.settingsTop = 0 // always enter at the top
 		e.render()
 	case btnBack:
 		switch e.screen {

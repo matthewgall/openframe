@@ -157,11 +157,12 @@ type Engine struct {
 	idx     int
 
 	// navigation state
-	galleryTop int
-	albumTop   int
-	searchTop  int
-	sortByName bool
-	filterChar rune // 0 = no filter
+	galleryTop  int
+	albumTop    int
+	searchTop   int
+	settingsTop int // first visible item on the (scrollable) settings screen
+	sortByName  bool
+	filterChar  rune // 0 = no filter
 
 	// slideshow state
 	controls     bool

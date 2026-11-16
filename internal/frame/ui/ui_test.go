@@ -499,6 +499,12 @@ func TestSettingsHoldToApply(t *testing.T) {
 		t.Fatal("staging must not apply")
 	}
 
+	// On a 1280x800 panel the apply block is below the fold: scroll
+	// to the bottom (3 items per swipe, clamped).
+	for i := 0; i < 3; i++ {
+		env.swipe(touch.DirDown)
+	}
+
 	// A plain TAP on apply does nothing.
 	var applyBtn *hitButton
 	for i := range e.buttons {
@@ -507,7 +513,7 @@ func TestSettingsHoldToApply(t *testing.T) {
 		}
 	}
 	if applyBtn == nil {
-		t.Fatal("apply button not found")
+		t.Fatal("apply button not found (settings not scrolled to it?)")
 	}
 	env.tap((applyBtn.rect[0]+applyBtn.rect[2])/2, (applyBtn.rect[1]+applyBtn.rect[3])/2)
 	if applied {
@@ -522,6 +528,66 @@ func TestSettingsHoldToApply(t *testing.T) {
 		t.Errorf("live interval = %v, want 1m", e.cfg.Interval)
 	}
 	_ = origInterval
+}
+
+func TestSettingsScroll(t *testing.T) {
+	photos := testPhotos(t, 1)
+	env := newUIEnv(t, photos, nil)
+	e := env.eng
+
+	env.swipe(touch.DirDown) // gallery
+	var settingsBtn *hitButton
+	for i := range e.buttons {
+		if e.buttons[i].kind == btnSettings {
+			settingsBtn = &e.buttons[i]
+		}
+	}
+	env.tap((settingsBtn.rect[0]+settingsBtn.rect[2])/2, (settingsBtn.rect[1]+settingsBtn.rect[3])/2)
+	if e.Screen() != ScreenSettings {
+		t.Fatalf("screen = %v, want settings", e.Screen())
+	}
+	if e.settingsTop != 0 {
+		t.Fatalf("entered settings at top %d, want 0", e.settingsTop)
+	}
+
+	applyVisible := func() bool {
+		for i := range e.buttons {
+			if e.buttons[i].kind == btnApply {
+				return true
+			}
+		}
+		return false
+	}
+	if applyVisible() {
+		t.Fatal("apply visible before scrolling — the bug this test pins")
+	}
+
+	// Scroll past the end: must clamp, not wrap or panic.
+	for i := 0; i < 10; i++ {
+		env.swipe(touch.DirDown)
+	}
+	if e.settingsTop == 0 {
+		t.Fatal("settings did not scroll down")
+	}
+	maxTop := e.settingsTop
+	if !applyVisible() {
+		t.Fatal("apply still not visible after scrolling to the bottom")
+	}
+	for i := 0; i < 10; i++ {
+		env.swipe(touch.DirDown)
+	}
+	if e.settingsTop != maxTop {
+		t.Fatalf("bottom clamp failed: top = %d, want %d", e.settingsTop, maxTop)
+	}
+	for i := 0; i < 20; i++ {
+		env.swipe(touch.DirUp)
+	}
+	if e.settingsTop != 0 {
+		t.Fatalf("top clamp failed: top = %d, want 0", e.settingsTop)
+	}
+	if applyVisible() {
+		t.Fatal("apply visible after scrolling back to the top")
+	}
 }
 
 func TestInactivityReturnsToSlideshow(t *testing.T) {

@@ -471,59 +471,118 @@ func (e *Engine) renderSearch() {
 	}
 }
 
+// settingsItem is one windowable unit on the settings screen.
+type settingsItem struct {
+	name  string // "" for divider/gap/apply
+	value string
+	kind  int
+	h     int
+}
+
+const (
+	setSetting = iota // tappable setting row (rowHeight)
+	setInfo           // read-only line (44)
+	setDivider        // separator bar (28)
+	setGap            // spacing before apply (60)
+	setApply          // hold-protected apply block (72)
+)
+
 func (e *Engine) renderSettings() {
 	e.cv.Font(fontTitle).DrawText(e.cv.Image(), margin, margin, "Settings", colText)
-	y := margin*2 + 56
-	rowW := e.w - 2*margin
-	y = e.settingRow(y, rowW, "Brightness", fmt.Sprintf("%d%%", int(e.staged.Brightness*100)))
-	y = e.settingRow(y, rowW, "Slideshow interval", formatDuration(e.staged.SlideshowInterval))
-	y = e.settingRow(y, rowW, "Transition", e.staged.Transition)
-	y = e.settingRow(y, rowW, "Orientation", fmt.Sprintf("%d°", e.staged.Orientation))
-	y = e.settingRow(y, rowW, "Sleep on", minutesToHM(e.staged.SleepOn))
-	y = e.settingRow(y, rowW, "Sleep off", minutesToHM(e.staged.SleepOff))
-	capV := "off"
+
+	capV, clkV := "off", "off"
 	if e.staged.ShowCaption {
 		capV = "on"
 	}
-	y = e.settingRow(y, rowW, "Captions", capV)
-	clkV := "off"
 	if e.staged.ShowClock {
 		clkV = "on"
 	}
-	y = e.settingRow(y, rowW, "Clock", clkV)
-
-	// Info block (read-only).
 	info := e.data.Info(context.Background())
-	e.cv.FillRect(margin, y+8, rowW, 8, color.NRGBA{255, 255, 255, 60})
-	y += 28
-	e.infoRow(y, rowW, "Device", info.DeviceName)
-	y += 44
 	reach := "unreachable"
 	if info.ServerReachable {
 		reach = "reachable"
 	}
-	e.infoRow(y, rowW, "Server", info.ServerURL+" ("+reach+")")
-	y += 44
 	last := "never"
 	if info.LastSync != nil {
 		last = info.LastSync.Format("2006-01-02 15:04")
 	}
-	e.infoRow(y, rowW, "Last sync", last)
-	y += 44
-	e.infoRow(y, rowW, "Storage free", formatBytes(info.FreeBytes))
-	y += 44
-	e.infoRow(y, rowW, "Version", info.Version)
-	y += 60
+	items := []settingsItem{
+		{"Brightness", fmt.Sprintf("%d%%", int(e.staged.Brightness*100)), setSetting, rowHeight},
+		{"Slideshow interval", formatDuration(e.staged.SlideshowInterval), setSetting, rowHeight},
+		{"Transition", e.staged.Transition, setSetting, rowHeight},
+		{"Orientation", fmt.Sprintf("%d°", e.staged.Orientation), setSetting, rowHeight},
+		{"Sleep on", minutesToHM(e.staged.SleepOn), setSetting, rowHeight},
+		{"Sleep off", minutesToHM(e.staged.SleepOff), setSetting, rowHeight},
+		{"Captions", capV, setSetting, rowHeight},
+		{"Clock", clkV, setSetting, rowHeight},
+		{"", "", setDivider, 28},
+		{"Device", info.DeviceName, setInfo, 44},
+		{"Server", info.ServerURL + " (" + reach + ")", setInfo, 44},
+		{"Last sync", last, setInfo, 44},
+		{"Storage free", formatBytes(info.FreeBytes), setInfo, 44},
+		{"Version", info.Version, setInfo, 44},
+		{"", "", setGap, 60},
+		{"HOLD to apply", "", setApply, 72},
+	}
 
-	// Apply (hold-protected).
-	bw := 320.0
-	bh := 72
-	bx := (e.w - int(bw)) / 2
-	e.cv.FillRect(bx, y, int(bw), bh, color.NRGBA{255, 196, 0, 46})
-	f := e.cv.Font(fontBody)
-	label := "HOLD to apply"
-	f.DrawText(e.cv.Image(), bx+(int(bw)-f.Width(label))/2, y+(bh-f.CellH())/2, label, colAccent)
-	e.buttons = append(e.buttons, hitButton{label: label, rect: [4]int{bx, y, bx + int(bw), y + bh}, kind: btnApply})
+	// Windowed like the gallery: settingsTop is the index of the first
+	// visible item, so on short panels the apply block is reached by
+	// swiping up/down instead of being painted off-screen.
+	y0 := margin*2 + 56
+	avail := e.h - margin - y0
+	visible, acc := 0, 0
+	for i, it := range items {
+		if acc+it.h > avail {
+			break
+		}
+		acc += it.h
+		visible = i + 1
+	}
+	if visible < 1 {
+		visible = 1
+	}
+	maxTop := len(items) - visible
+	if maxTop < 0 {
+		maxTop = 0
+	}
+	if e.settingsTop < 0 {
+		e.settingsTop = 0
+	}
+	if e.settingsTop > maxTop {
+		e.settingsTop = maxTop
+	}
+	if maxTop > 0 {
+		e.cv.Font(fontBody).DrawText(e.cv.Image(), e.w-margin-160, margin+16, "swipe: scroll", colDim)
+	}
+
+	rowW := e.w - 2*margin
+	y := y0
+	end := e.settingsTop + visible
+	if end > len(items) {
+		end = len(items)
+	}
+	for _, it := range items[e.settingsTop:end] {
+		switch it.kind {
+		case setSetting:
+			y = e.settingRow(y, rowW, it.name, it.value)
+		case setInfo:
+			e.infoRow(y, rowW, it.name, it.value)
+			y += it.h
+		case setDivider:
+			e.cv.FillRect(margin, y+8, rowW, 8, color.NRGBA{255, 255, 255, 60})
+			y += it.h
+		case setGap:
+			y += it.h
+		case setApply:
+			bw := 320.0
+			bx := (e.w - int(bw)) / 2
+			e.cv.FillRect(bx, y, int(bw), it.h, color.NRGBA{255, 196, 0, 46})
+			f := e.cv.Font(fontBody)
+			f.DrawText(e.cv.Image(), bx+(int(bw)-f.Width(it.name))/2, y+(it.h-f.CellH())/2, it.name, colAccent)
+			e.buttons = append(e.buttons, hitButton{label: it.name, rect: [4]int{bx, y, bx + int(bw), y + it.h}, kind: btnApply})
+			y += it.h
+		}
+	}
 }
 
 // settingRow draws a tappable setting row and registers its hit area
