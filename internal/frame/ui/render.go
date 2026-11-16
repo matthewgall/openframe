@@ -208,9 +208,16 @@ func (e *Engine) renderEmpty() {
 			e.renderPairing()
 			return
 		}
+		// No pairing code is ever shown while unreachable: the code is
+		// created ON the server (RequestChallenge), so a code on a
+		// disconnected frame could never reach the admin console.
+		// Unreachable + Wi-Fi capable: the setup hint carries the
+		// message. Reachable (or no Wi-Fi): the normal pairing copy.
 		e.drawCentered(fontBody, e.h/2-14, "This frame is not set up yet.", colDim)
-		e.drawCentered(fontBody, e.h/2+26, "Pair it in the admin console (Frames -> Pending pairing)", colDim)
-		e.drawCentered(fontBody, e.h/2+50, "or set a credential manually (openframe pair).", colDim)
+		if e.wifi == nil || info.ServerReachable {
+			e.drawCentered(fontBody, e.h/2+26, "Pair it in the admin console (Frames -> Pending pairing)", colDim)
+			e.drawCentered(fontBody, e.h/2+50, "or set a credential manually (openframe pair).", colDim)
+		}
 		e.renderWifiSetupHint()
 		return
 	}
