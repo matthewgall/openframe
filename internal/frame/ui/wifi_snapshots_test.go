@@ -141,7 +141,14 @@ func TestRenderWifiScreens(t *testing.T) {
 	save("4-wifi-keyboard-shown.png")
 
 	// Screen 5: the network is back — the pairing code now exists
-	// (created on the server) and the hint is gone.
+	// (created on the server) and the hint is gone. Get back to the
+	// empty state the way a person would: swipe back off the keyboard,
+	// then off the list.
+	swipeRight := func() {
+		e.HandleGesture(touch.Gesture{Kind: touch.KindSwipe, Dir: touch.DirRight, Pos: [2]int{100, 400}, T: time.Now()})
+	}
+	swipeRight()
+	swipeRight()
 	e.mu.Lock()
 	data.info.ServerReachable = true
 	e.mu.Unlock()
