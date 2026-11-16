@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"time"
+	"unicode"
 
 	"github.com/matthewgall/openframe/internal/frame/touch"
 )
@@ -100,6 +101,24 @@ func (e *Engine) onSwipe(dir touch.Dir) {
 			e.goGallery()
 			e.render()
 		}
+	case ScreenWifiList, ScreenWifiText:
+		if dir == touch.DirRight {
+			e.goWifiBack()
+			return
+		}
+		if e.screen == ScreenWifiList {
+			switch dir {
+			case touch.DirUp:
+				e.wifiTop -= 3
+				if e.wifiTop < 0 {
+					e.wifiTop = 0
+				}
+				e.render()
+			case touch.DirDown:
+				e.wifiTop += 3
+				e.render()
+			}
+		}
 	}
 }
 
@@ -151,7 +170,7 @@ func (e *Engine) onHold(pos [2]int) {
 
 func (e *Engine) doButton(kind int, b hitButton) {
 	ctx := context.Background()
-	if kind >= btnSetting && kind < btnSetting+8 {
+	if kind >= btnSetting && kind < btnSetting+9 {
 		e.doSetting(kind - btnSetting)
 		return
 	}
@@ -218,6 +237,36 @@ func (e *Engine) doButton(kind int, b hitButton) {
 		e.sortByName = !e.sortByName
 		e.searchTop = 0
 		e.render()
+	case btnWifiNet:
+		if e.wifiBusy {
+			return
+		}
+		if e.networkEncrypted(b.label) {
+			e.goWifiText(b.label, true)
+		} else {
+			e.startWifiConnect(b.label, "")
+			e.render()
+		}
+	case btnWifiHidden:
+		if !e.wifiBusy {
+			e.goWifiText("", false)
+		}
+	case btnWifiSetup:
+		e.goWifiList(1)
+	case btnKey:
+		ch := rune(b.label[0])
+		if e.wifiShift {
+			ch = unicode.ToUpper(ch)
+		}
+		e.keyPress(ch)
+	case btnKeyShift:
+		e.toggleShift()
+	case btnKeyBack:
+		e.keyBackspace()
+	case btnKeyShow:
+		e.toggleShow()
+	case btnKeyDone:
+		e.keyDone()
 	case browsePhoto:
 		e.openPhotoByHash(b.label)
 	}

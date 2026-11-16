@@ -29,6 +29,7 @@ import (
 	"github.com/matthewgall/openframe/internal/frame/canvas"
 	"github.com/matthewgall/openframe/internal/frame/display"
 	"github.com/matthewgall/openframe/internal/frame/touch"
+	"github.com/matthewgall/openframe/internal/wifi"
 )
 
 // Screen identifies a UI screen.
@@ -41,6 +42,8 @@ const (
 	ScreenAlbum
 	ScreenSearch
 	ScreenSettings
+	ScreenWifiList
+	ScreenWifiText
 	ScreenSleep
 )
 
@@ -58,6 +61,10 @@ func (s Screen) String() string {
 		return "search"
 	case ScreenSettings:
 		return "settings"
+	case ScreenWifiList:
+		return "wifi-list"
+	case ScreenWifiText:
+		return "wifi-text"
 	case ScreenSleep:
 		return "sleep"
 	}
@@ -189,6 +196,21 @@ type Engine struct {
 	// settings staging
 	staged Settings
 
+	// Wi-Fi setup (ADR-0014); wifi == nil hides the whole feature.
+	wifi      wifi.Backend
+	wifiInfo  wifi.Info
+	wifiNets  []wifi.Network
+	wifiBusy  bool // a scan or connect is in flight
+	wifiMsg   string
+	wifiFrom  int    // 0 = entered from settings, 1 = from pairing screen
+	wifiSSID  string // SSID being configured on the text screen
+	wifiTop   int    // first visible network in the list
+	wifiText  string // current keyboard input
+	wifiPsk   bool   // text screen is entering a passphrase
+	wifiShow  bool   // show the passphrase as typed
+	wifiShift bool   // keyboard: next-case toggle
+	async     chan asyncResult
+
 	// slideshow advance scheduling (Run owns the tickers; Tick may
 	// reset the advance ticker when the effective interval changes —
 	// thermal throttle or a settings apply).
@@ -221,8 +243,17 @@ const (
 	btnApply
 	btnSort
 	browsePhoto // grid/row tap -> open photo
-	btnSetting  // followed by a setting index (btnSetting + 0..7);
-	// MUST stay last: doButton range-checks btnSetting..btnSetting+7.
+	// Wi-Fi setup (ADR-0014).
+	btnWifiNet    // tap a scanned network (label = SSID)
+	btnWifiHidden // enter a hidden network name
+	btnWifiSetup  // pairing-screen "tap to set up Wi-Fi"
+	btnKey        // keyboard key (label = the base lowercase rune)
+	btnKeyShift   // toggle upper case
+	btnKeyBack    // backspace
+	btnKeyShow    // show/hide passphrase
+	btnKeyDone    // commit the text
+	btnSetting    // followed by a setting index (btnSetting + 0..8);
+	// MUST stay last: doButton range-checks btnSetting..btnSetting+8.
 )
 
 // New builds an Engine. The display must already be inited; Run
@@ -263,6 +294,10 @@ func (e *Engine) Run(ctx context.Context) error {
 			return nil
 		case g := <-e.in:
 			e.HandleGesture(g)
+		case r := <-e.async:
+			e.mu.Lock()
+			e.handleAsync(r)
+			e.mu.Unlock()
 		case <-tick.C:
 			e.Tick(e.cfg.Now())
 		case <-e.advanceTick.C:

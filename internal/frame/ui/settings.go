@@ -127,6 +127,11 @@ func (e *Engine) doSetting(index int) {
 		e.staged.ShowCaption = !e.staged.ShowCaption
 	case 7: // Clock.
 		e.staged.ShowClock = !e.staged.ShowClock
+	case 8: // Wi-Fi: opens the network list (not a staged setting).
+		if e.wifi != nil {
+			e.goWifiList(0)
+			return
+		}
 	}
 	e.render()
 }

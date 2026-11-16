@@ -500,8 +500,8 @@ func TestSettingsHoldToApply(t *testing.T) {
 	}
 
 	// On a 1280x800 panel the apply block is below the fold: scroll
-	// to the bottom (3 items per swipe, clamped).
-	for i := 0; i < 3; i++ {
+	// to the bottom (3 items per swipe, clamped at maxTop).
+	for i := 0; i < 5; i++ {
 		env.swipe(touch.DirDown)
 	}
 

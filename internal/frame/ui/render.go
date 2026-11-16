@@ -51,6 +51,10 @@ func (e *Engine) render() {
 		e.renderSearch()
 	case ScreenSettings:
 		e.renderSettings()
+	case ScreenWifiList:
+		e.renderWifiList()
+	case ScreenWifiText:
+		e.renderWifiText()
 	case ScreenSleep:
 		// Black frame; the driver's power state handles the
 		// backlight (spec §11).
@@ -207,6 +211,7 @@ func (e *Engine) renderEmpty() {
 		e.drawCentered(fontBody, e.h/2-14, "This frame is not set up yet.", colDim)
 		e.drawCentered(fontBody, e.h/2+26, "Pair it in the admin console (Frames -> Pending pairing)", colDim)
 		e.drawCentered(fontBody, e.h/2+50, "or set a credential manually (openframe pair).", colDim)
+		e.renderWifiSetupHint()
 		return
 	}
 	f := e.cv.Font(fontTitle)
@@ -237,6 +242,28 @@ func (e *Engine) renderPairing() {
 
 	e.drawCentered(fontBody, e.h/2+70, "The code is single-use and expires in 15 minutes.", colDim)
 	e.drawCentered(fontBody, e.h/2+110, "Photos start arriving as soon as it is approved.", colDim)
+	e.renderWifiSetupHint()
+}
+
+// renderWifiSetupHint offers Wi-Fi setup when the frame cannot reach
+// the server AND a Wi-Fi backend exists (ADR-0014): the classic
+// stuck-at-first-boot case. Nothing renders when the network is fine.
+func (e *Engine) renderWifiSetupHint() {
+	if e.wifi == nil {
+		return
+	}
+	info := e.data.Info(context.Background())
+	if info.ServerReachable {
+		return // the network is not the problem
+	}
+	e.drawCentered(fontBody, e.h/2+150, "No connection to the server.", colDim)
+	label := "TAP to set up Wi-Fi"
+	bw := 320
+	x := (e.w - bw) / 2
+	y := e.h/2 + 170
+	e.cv.FillRect(x, y, bw, 56, color.NRGBA{255, 255, 255, 20})
+	e.cv.Font(fontBody).DrawText(e.cv.Image(), x+(bw-e.cv.Font(fontBody).Width(label))/2, y+16, label, colAccent)
+	e.buttons = append(e.buttons, hitButton{label: label, rect: [4]int{x, y, x + bw, y + 56}, kind: btnWifiSetup})
 }
 
 func (e *Engine) renderDetails() {
@@ -515,6 +542,7 @@ func (e *Engine) renderSettings() {
 		{"Sleep off", minutesToHM(e.staged.SleepOff), setSetting, rowHeight},
 		{"Captions", capV, setSetting, rowHeight},
 		{"Clock", clkV, setSetting, rowHeight},
+		{"Wi-Fi", e.wifiStateValue(), setSetting, rowHeight},
 		{"", "", setDivider, 28},
 		{"Device", info.DeviceName, setInfo, 44},
 		{"Server", info.ServerURL + " (" + reach + ")", setInfo, 44},
@@ -620,6 +648,10 @@ func settingIndex(name string) int {
 		return 5
 	case "Captions":
 		return 6
+	case "Clock":
+		return 7
+	case "Wi-Fi":
+		return 8
 	default:
 		return 7
 	}
@@ -656,6 +688,9 @@ func (e *Engine) composeTransition(old, new *image.NRGBA, t float64) {
 }
 
 func truncate(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
 	r := []rune(s)
 	if len(r) <= n {
 		return s
@@ -719,4 +754,141 @@ func drawStar(cv *canvas.Canvas, cx, cy, r int, col color.NRGBA) {
 		pts = append(pts, [2]int{cx + int(rr*math.Cos(a)), cy + int(rr*math.Sin(a))})
 	}
 	cv.Polygon(pts, col)
+}
+
+// --- Wi-Fi setup screens (ADR-0014) ----------------------------------
+
+func (e *Engine) renderWifiList() {
+	e.cv.Font(fontTitle).DrawText(e.cv.Image(), margin, margin, "Wi-Fi", colText)
+	e.cv.Font(fontBody).DrawText(e.cv.Image(), e.w-margin-180, margin+16, "swipe: back", colDim)
+
+	status := e.wifiMsg
+	if status == "" {
+		switch {
+		case e.wifiInfo.WiredUp:
+			status = "A wired connection is up (Wi-Fi can still be set up)."
+		case e.wifiInfo.ConnectedSSID != "":
+			status = "Connected: " + e.wifiInfo.ConnectedSSID
+		default:
+			status = "Select a network"
+		}
+	}
+	e.cv.Font(fontBody).DrawText(e.cv.Image(), margin, margin*2+8, truncate(status, 70), colDim)
+
+	rowW := e.w - 2*margin
+	visible := (e.h - margin - (margin*2 + 56)) / rowHeight
+	if visible < 1 {
+		visible = 1
+	}
+	maxTop := len(e.wifiNets) + 1 - visible // +1 = the hidden-network row
+	if maxTop < 0 {
+		maxTop = 0
+	}
+	if e.wifiTop > maxTop {
+		e.wifiTop = maxTop
+	}
+	y := margin*2 + 56
+	for i := e.wifiTop; i < len(e.wifiNets) && (i-e.wifiTop) < visible; i++ {
+		n := e.wifiNets[i]
+		e.cv.FillRect(margin, y, rowW, rowHeight-16, color.NRGBA{255, 255, 255, 26})
+		right := fmt.Sprintf("%d%%", n.Signal)
+		if !n.Encrypted {
+			right = right + "  (open)"
+		}
+		f := e.cv.Font(fontBody)
+		maxName := (rowW-40-f.Width(right))/f.CellW() - 2
+		e.cv.Font(fontBody).DrawText(e.cv.Image(), margin+16, y+(rowHeight-16)/2-14, truncate(n.SSID, maxName), colText)
+		e.cv.Font(fontBody).DrawText(e.cv.Image(), margin+rowW-16-f.Width(right), y+(rowHeight-16)/2-14, right, colDim)
+		e.buttons = append(e.buttons, hitButton{label: n.SSID, rect: [4]int{margin, y, margin + rowW, y + rowHeight - 16}, kind: btnWifiNet})
+		y += rowHeight
+	}
+	// The hidden-network row scrolls with the list, like a network.
+	if e.wifiTop == maxTop {
+		e.cv.FillRect(margin, y, rowW, rowHeight-16, color.NRGBA{255, 255, 255, 26})
+		e.cv.Font(fontBody).DrawText(e.cv.Image(), margin+16, y+(rowHeight-16)/2-14, "Hidden network…", colText)
+		e.buttons = append(e.buttons, hitButton{label: "hidden", rect: [4]int{margin, y, margin + rowW, y + rowHeight - 16}, kind: btnWifiHidden})
+	}
+}
+
+func (e *Engine) renderWifiText() {
+	title := "Hidden network"
+	if e.wifiPsk {
+		title = "Password for " + truncate(e.wifiSSID, 22)
+	}
+	e.cv.Font(fontTitle).DrawText(e.cv.Image(), margin, margin, truncate(title, 30), colText)
+	e.cv.Font(fontBody).DrawText(e.cv.Image(), e.w-margin-180, margin+16, "swipe: back", colDim)
+
+	rowW := e.w - 2*margin
+	y := margin*2 + 40
+	// Input field.
+	fieldH := 64
+	e.cv.FillRect(margin, y, rowW, fieldH, color.NRGBA{255, 255, 255, 14})
+	f := e.cv.Font(fontBody)
+	shown := e.wifiText
+	if e.wifiPsk && !e.wifiShow {
+		shown = strings.Repeat("*", len(runesOf(shown)))
+	}
+	maxRunes := (rowW - 32) / f.CellW()
+	if r := runesOf(shown); len(r) > maxRunes {
+		shown = string(r[len(r)-maxRunes:]) // keep the tail visible
+	}
+	e.cv.Font(fontBody).DrawText(e.cv.Image(), margin+16, y+(fieldH-f.CellH())/2, shown, colText)
+	y += fieldH + 24
+
+	// Keyboard: three letter rows + an action row.
+	const gap = 6
+	cellW := (rowW - 9*gap) / 10
+	rowH := 56
+	for _, letters := range []string{"qwertyuiop", "asdfghjkl", "zxcvbnm"} {
+		for i := 0; i < len(letters); i++ {
+			ch := rune(letters[i])
+			shown := string(ch)
+			if e.wifiShift {
+				shown = strings.ToUpper(shown)
+			}
+			x := margin + i*(cellW+gap)
+			e.cv.FillRect(x, y, cellW, rowH, color.NRGBA{255, 255, 255, 26})
+			e.cv.Font(fontBody).DrawText(e.cv.Image(), x+(cellW-f.Width(shown))/2, y+(rowH-f.CellH())/2, shown, colText)
+			e.buttons = append(e.buttons, hitButton{label: string(ch), rect: [4]int{x, y, x + cellW, y + rowH}, kind: btnKey})
+		}
+		y += rowH + gap
+	}
+	// Action row: Space / Show-Hide / Backspace / Done.
+	cellW2 := (rowW - 4*gap) / 5
+	acts := []struct {
+		label string // the value doButton sees (" " = space key)
+		text  string
+		kind  int
+	}{
+		{" ", "Space", btnKey},
+		{"shift", "Shift", btnKeyShift},
+		{"show", "Show", btnKeyShow},
+		{"<", "<", btnKeyBack},
+		{"Done", "Done", btnKeyDone},
+	}
+	for i, a := range acts {
+		x := margin + i*(cellW2+gap)
+		if (a.kind == btnKeyShow) && !e.wifiPsk {
+			// No Show/Hide on the SSID entry: inert cell.
+			e.cv.FillRect(x, y, cellW2, rowH, color.NRGBA{255, 255, 255, 12})
+			continue
+		}
+		if a.kind == btnKeyShift {
+			a.text = "Shift"
+			if e.wifiShift {
+				a.text = "Unshift"
+			}
+		}
+		bg := color.NRGBA{255, 255, 255, 26}
+		col := colText
+		if a.kind == btnKeyDone {
+			bg, col = color.NRGBA{255, 196, 0, 46}, colAccent
+		}
+		e.cv.FillRect(x, y, cellW2, rowH, bg)
+		e.cv.Font(fontBody).DrawText(e.cv.Image(), x+(cellW2-f.Width(a.text))/2, y+(rowH-f.CellH())/2, a.text, col)
+		e.buttons = append(e.buttons, hitButton{label: a.label, rect: [4]int{x, y, x + cellW2, y + rowH}, kind: a.kind})
+	}
+	if e.wifiMsg != "" {
+		e.cv.Font(fontBody).DrawText(e.cv.Image(), margin, y+rowH+12, truncate(e.wifiMsg, 80), colAccent)
+	}
 }
