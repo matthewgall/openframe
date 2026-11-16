@@ -239,32 +239,47 @@ func (f *Frame) uiComponent(ctx context.Context) error {
 	return f.ui.eng.Run(ctx)
 }
 
-// touchComponent reads the touchscreen evdev node and feeds the
-// gesture recognizer into the UI input channel.
+// touchComponent feeds the gesture recognizer (real or dev input)
+// into the UI input channel. Production input is the evdev node;
+// frame.touch.dev_input points at a FIFO of synthetic finger samples
+// for headless UI testing (see touch.DevInput and docs/development.md).
 func (f *Frame) touchComponent(ctx context.Context) error {
 	eff := f.effectiveConfig()
 	if !eff.Frame.Touch.Enabled {
 		return nil
 	}
-	devPath := eff.Frame.Touch.Device
-	if devPath == "" {
-		p, err := touch.FindTouchscreen("", "")
+
+	var samples <-chan touch.Sample
+	if eff.Frame.Touch.DevInput != "" {
+		di, err := touch.DevInputFromFile(eff.Frame.Touch.DevInput, f.log)
 		if err != nil {
-			f.log.Info("no touchscreen found; running touchless", "error", err)
+			f.log.Warn("dev input unavailable; running touchless", "path", eff.Frame.Touch.DevInput, "error", err)
 			return nil
 		}
-		devPath = p
+		f.log.Info("dev input source attached", "path", eff.Frame.Touch.DevInput)
+		samples = di.Stream(ctx)
+	} else {
+		devPath := eff.Frame.Touch.Device
+		if devPath == "" {
+			p, err := touch.FindTouchscreen("", "")
+			if err != nil {
+				f.log.Info("no touchscreen found; running touchless", "error", err)
+				return nil
+			}
+			devPath = p
+		}
+		dev, err := touch.Open(devPath)
+		if err != nil {
+			f.log.Warn("touch open failed; running touchless", "device", devPath, "error", err)
+			return nil
+		}
+		defer dev.Close()
+		f.log.Info("touch device attached", "device", devPath)
+		samples = dev.Stream(ctx)
 	}
-	dev, err := touch.Open(devPath)
-	if err != nil {
-		f.log.Warn("touch open failed; running touchless", "device", devPath, "error", err)
-		return nil
-	}
-	defer dev.Close()
-	f.log.Info("touch device attached", "device", devPath)
 
 	rec := touch.NewRecognizer(touch.Options{})
-	for s := range dev.Stream(ctx) {
+	for s := range samples {
 		for _, g := range rec.Feed(s) {
 			select {
 			case f.ui.gestures <- g:

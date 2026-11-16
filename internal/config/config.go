@@ -182,6 +182,12 @@ type TouchConfig struct {
 	// Device is the evdev node, e.g. /dev/input/event3. Empty means
 	// auto-detect the first touchscreen-class input device.
 	Device string `yaml:"device"`
+	// DevInput is a FIFO path that feeds synthetic finger samples
+	// into the gesture recognizer (tap/swipe/hold line protocol) for
+	// headless UI testing. A development aid — leave unset in
+	// production. See internal/frame/touch/devinput.go and
+	// docs/development.md.
+	DevInput string `yaml:"dev_input"`
 }
 
 // ThermalConfig configures thermal throttling (spec §7: "hardware:

@@ -64,6 +64,51 @@ end-to-end test (`internal/frame/e2e_test.go`) does exactly this:
 real server → real frame → decodes the snapshot → asserts the
 uploaded photo's pixels are on screen.
 
+### Driving the UI headlessly (dev input)
+
+To *interact* with the UI without a panel — open the menu, flip a
+setting, watch it render — point the frame's touch pipeline at a
+FIFO of synthetic finger samples:
+
+```yaml
+frame:
+  touch:
+    dev_input: /tmp/of-snap/touch.fifo   # created if missing
+```
+
+Then drive it from a shell, and watch `latest.png`:
+
+```sh
+mkfifo /tmp/of-snap/touch.fifo 2>/dev/null   # the frame creates it too
+echo "swipe down"  > /tmp/of-snap/touch.fifo   # slideshow → gallery (menu)
+echo "tap 200 100" > /tmp/of-snap/touch.fifo   # tap a button
+```
+
+Protocol (one command per line; the real gesture recognizer runs on
+the injected samples, so everything is exercised exactly as on a
+panel):
+
+| line | meaning |
+|---|---|
+| `tap X Y` | short press + release → Tap |
+| `dtap X Y` | two quick taps → Tap then DoubleTap |
+| `hold X Y [ms]` | press, wait (default 900), release → Hold |
+| `swipe L\|U\|R\|D [X Y]` | swipe from centre (or given start) |
+| `down X Y` / `move X Y` / `up [X Y]` | raw samples, full control |
+| `wait [ms]` | script delay (default 100) |
+| `# …` | comment |
+
+Useful gestures per screen: slideshow — tap reveals the controls,
+double-tap opens details, swipe ←/→ advances, swipe ↓ opens the
+gallery; gallery — tap an album/search/settings/favourites button,
+swipe ↑/↓ scrolls; settings — a **hold** on Apply commits (a plain
+tap deliberately does nothing).
+
+This is a development aid, not a security surface: it only works
+when the config key is set, and the FIFO is only as reachable as the
+frame's filesystem. In production the key is unset and evdev is the
+sole input source.
+
 UI development conventions:
 
 - `internal/frame/ui` is a synchronous state machine: one goroutine
