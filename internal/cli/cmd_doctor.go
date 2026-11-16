@@ -139,6 +139,9 @@ func runDoctor(args []string) int {
 		}
 	}
 
+	// 8b. Wi-Fi management (the on-screen setup path, ADR-0014).
+	wifiCheck(ctx, add)
+
 	// 9. Thermal sensor (throttling needs a readable zone).
 	temp, err := thermal.NewSysfsReader("/sys/class/thermal").MaxTempC()
 	if err != nil {

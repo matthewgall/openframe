@@ -262,6 +262,30 @@ func (e *Engine) networkEncrypted(ssid string) bool {
 	return true
 }
 
+// WifiAutoConnect resumes saved networks on boot (the frame wiring
+// calls it in the background): a powered-off frame rejoins its
+// network without a person in the room.
+func (e *Engine) WifiAutoConnect(ctx context.Context) error {
+	e.mu.Lock()
+	b := e.wifi
+	if b == nil {
+		e.mu.Unlock()
+		return nil
+	}
+	e.mu.Unlock()
+	if err := b.AutoConnect(ctx); err != nil {
+		return err
+	}
+	info, err := b.Info(ctx)
+	if err != nil {
+		return err
+	}
+	e.mu.Lock()
+	e.wifiInfo = info
+	e.mu.Unlock()
+	return nil
+}
+
 // shortErr keeps user-facing errors to one line.
 func shortErr(err error) string {
 	if err == nil {

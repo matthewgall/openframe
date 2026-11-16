@@ -19,3 +19,4 @@ they are marked superseded with a pointer.
 | [ADR-0011](ADR-0011-multi-arch-cross-compile.md) | Multi-architecture support via pure-Go cross-compilation | accepted |
 | [ADR-0012](ADR-0012-s3-storage.md) | S3-compatible photo storage on aws-sdk-go-v2 (pure Go, no cgo) | accepted (revised) |
 | [ADR-0013](ADR-0013-destructive-action-confirmation.md) | Destructive actions require confirmation (device/person/secret rule) | accepted |
+| [ADR-0014](ADR-0014-wifi-setup.md) | On-screen Wi-Fi setup via the internal/wifi platform seam (NM first, wpa_supplicant fallback) | accepted |

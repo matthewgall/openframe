@@ -39,6 +39,16 @@ touchscreen (USB HID touch), subject to validation on real hardware.
   `SetBrightness`/`SetPower` use it; otherwise the documented
   degradation applies (no-op brightness, black frame for power off) —
   ADR-0006.
+- **Wi-Fi setup (ADR-0014)**: the frame manages its own Wi-Fi from
+  the touchscreen (Settings → Wi-Fi, or the pairing screen when the
+  server is unreachable). Backend autodetection: NetworkManager
+  first (Pi OS default), then wpa_supplicant + iw (needs
+  `dhclient` or `dhcpcd` for DHCP); the frame runs root on the Pi,
+  which is what this needs. Saved networks live in
+  `/etc/wpa_supplicant/openframe.conf` (0600) for the
+  wpa_supplicant path and in NetworkManager itself otherwise; they
+  are resumed automatically at boot. `openframe doctor` reports the
+  chosen backend and current state.
 - **Power**: 5 V / 2.5 A (Pi 3B+) plus panel consumption — measure the
   combined load before choosing the PSU; under-powering shows up as
   SD card corruption, which we must never ship a box that is prone to.

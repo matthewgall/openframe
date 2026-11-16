@@ -24,6 +24,7 @@ import (
 	"github.com/matthewgall/openframe/internal/frame/sleep"
 	"github.com/matthewgall/openframe/internal/frame/thermal"
 	"github.com/matthewgall/openframe/internal/frame/touch"
+	wifipkg "github.com/matthewgall/openframe/internal/wifi"
 	"github.com/matthewgall/openframe/internal/frame/ui"
 	"github.com/matthewgall/openframe/internal/platform"
 	"github.com/matthewgall/openframe/internal/version"
@@ -102,6 +103,19 @@ func (f *Frame) buildDisplay(ctx context.Context) (*uiState, error) {
 	data := &frameData{f: f}
 	gestures := make(chan touch.Gesture, gestureChannelBuffer)
 	eng := ui.New(cv, f.drv, data, uiCfg, f.log, gestures)
+
+	// Wi-Fi setup (ADR-0014): install the backend — the UI hides the
+	// whole feature when the platform has no Wi-Fi management — and
+	// resume saved networks in the background so a powered-off frame
+	// rejoins its network on its own.
+	eng.SetWifi(wifipkg.New())
+	go func() {
+		ctx2, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		if err := eng.WifiAutoConnect(ctx2); err != nil {
+			f.log.Info("wifi autoconnect: nothing to resume", "error", err)
+		}
+	}()
 
 	sched, err := sleep.FromConfig(f.cfg.Frame.Sleep.On, f.cfg.Frame.Sleep.Off, f.cfg.Frame.Sleep.TZ)
 	if err != nil {
