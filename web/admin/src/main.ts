@@ -248,15 +248,13 @@ function renderApp(root: HTMLElement, onUnauthed: () => void): void {
     const isSection = sections.some((s) => s.id === id);
     if (isSection || id.startsWith('album/')) show(id);
   };
+  // All navigation — sidebar links, album cards, back links, browser
+  // back/forward — goes through native hash anchors plus this one
+  // listener. (The sidebar links used to preventDefault and render
+  // directly: that desynced the URL from the page, so revisiting the
+  // same album afterwards was a no-op hashchange.)
   window.addEventListener('hashchange', () => {
     navigate(location.hash.slice(1) || 'dashboard');
-  });
-  nav.addEventListener('click', (e) => {
-    const a = (e.target as HTMLElement).closest('a');
-    if (!a) return;
-    e.preventDefault();
-    const id = a.getAttribute('href')?.slice(1);
-    if (id) navigate(id);
   });
 
   const initial = location.hash.slice(1) || 'dashboard';
