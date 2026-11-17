@@ -120,7 +120,7 @@ jobs:
         with:
           node-version: "22"
       - name: Cache node modules
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: web/admin/node_modules
           key: npm-${{ runner.os }}-${{ hashFiles('web/admin/package-lock.json') }}
