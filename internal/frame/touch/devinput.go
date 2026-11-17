@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -73,7 +72,7 @@ func DevInputFromFile(path string, log *slog.Logger) (*DevInput, error) {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return nil, err
 		}
-		if err := syscall.Mknod(path, 0o622|syscall.S_IFIFO, 0); err != nil {
+		if err := createFifo(path); err != nil {
 			return nil, err
 		}
 	} else if err != nil {
