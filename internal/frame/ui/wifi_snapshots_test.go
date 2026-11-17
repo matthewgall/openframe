@@ -57,16 +57,16 @@ func TestRenderWifiScreens(t *testing.T) {
 		info:   Info{DeviceName: "Living room", ServerURL: "https://openframe.gall.family", Paired: false, ServerReachable: false, Version: "0.1.0"},
 	}
 	cfg := &Config{
-		Interval:           45 * time.Second,
-		Order:              "sequential",
-		Fit:                "contain",
-		ShowCaption:        true,
-		ShowClock:          true,
-		Transition:         "none",
-		Brightness:         0.8,
-		SleepOn:            7 * 60,
-		SleepOff:           22 * 60,
-		Now:                time.Now,
+		Interval:    45 * time.Second,
+		Order:       "sequential",
+		Fit:         "contain",
+		ShowCaption: true,
+		ShowClock:   true,
+		Transition:  "none",
+		Brightness:  0.8,
+		SleepOn:     7 * 60,
+		SleepOff:    22 * 60,
+		Now:         time.Now,
 	}
 	e := New(cv, drv, data, cfg, discard, make(chan touch.Gesture, 8))
 	e.SetWifi(fw)

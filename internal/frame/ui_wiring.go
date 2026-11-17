@@ -24,10 +24,10 @@ import (
 	"github.com/matthewgall/openframe/internal/frame/sleep"
 	"github.com/matthewgall/openframe/internal/frame/thermal"
 	"github.com/matthewgall/openframe/internal/frame/touch"
-	wifipkg "github.com/matthewgall/openframe/internal/wifi"
 	"github.com/matthewgall/openframe/internal/frame/ui"
 	"github.com/matthewgall/openframe/internal/platform"
 	"github.com/matthewgall/openframe/internal/version"
+	wifipkg "github.com/matthewgall/openframe/internal/wifi"
 )
 
 // gestureChannelBuffer bounds the input channel so a stalled UI can
