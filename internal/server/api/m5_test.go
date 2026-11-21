@@ -128,6 +128,17 @@ func TestM5PairingFlow(t *testing.T) {
 	env := newM5Env(t)
 	const fid = "11111111-2222-4333-8444-555555555555"
 
+	// 0. Client input on the PUBLIC endpoint: an invalid device_id
+	//    must be a 400, never a 500 (the 500 path logs an internal
+	//    error and leaks nothing, but clients can't distinguish).
+	c0, out0 := env.frameRequest(http.MethodPost, "/api/v1/devices/pair-challenges", map[string]string{
+		"device_id":   "not-a-uuid",
+		"device_name": "Smoke",
+	})
+	if c0 != http.StatusBadRequest {
+		t.Fatalf("invalid device_id: %d %v, want 400", c0, out0)
+	}
+
 	// 1. The frame requests a challenge (public endpoint).
 	code, out := env.frameRequest(http.MethodPost, "/api/v1/devices/pair-challenges", map[string]string{
 		"device_id":   fid,

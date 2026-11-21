@@ -175,6 +175,8 @@ func domainError(err error) (int, string, string) {
 		return http.StatusTooManyRequests, "rate_limited", "too many pairing requests; try again later"
 	case errors.Is(err, pairing.ErrExists):
 		return http.StatusConflict, "device_registered", "this frame is already registered"
+	case errors.Is(err, pairing.ErrInvalidDeviceID):
+		return http.StatusBadRequest, "invalid_device_id", "device_id must be the frame's UUID"
 	case isConfigValidationError(err):
 		return http.StatusBadRequest, "invalid_config", err.Error()
 	}

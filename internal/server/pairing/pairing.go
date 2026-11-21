@@ -63,6 +63,9 @@ var (
 	ErrNotPending = errors.New("pairing: challenge already consumed")
 	ErrRateLimit  = errors.New("pairing: too many pairing requests; try again later")
 	ErrExists     = errors.New("pairing: device already registered")
+	// ErrInvalidDeviceID is client input (the pair-challenges endpoint
+	// is public): it must surface as 400, never 500.
+	ErrInvalidDeviceID = errors.New("pairing: invalid device id")
 )
 
 // Challenge is the admin-visible view. The code itself never appears
@@ -122,7 +125,7 @@ func (s *Store) Create(ctx context.Context, deviceID, deviceName, sourceIP strin
 	deviceID = strings.ToLower(strings.TrimSpace(deviceID))
 	deviceName = strings.TrimSpace(deviceName)
 	if !id.IsValidUUID(deviceID) {
-		return nil, errors.New("pairing: invalid device id")
+		return nil, ErrInvalidDeviceID
 	}
 	if deviceName == "" || len(deviceName) > 100 {
 		deviceName = "Frame"
