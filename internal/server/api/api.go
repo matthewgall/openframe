@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -44,6 +45,12 @@ type Server struct {
 	loginLimiter *auth.RateLimiter
 	pipeOpts     photos.Options
 	mail         *email.Sender
+
+	// MFA challenges (TOTP step of login). In-memory by design: a
+	// restart simply requires re-entering the password, which is the
+	// correct failure mode for a half-finished login.
+	mfaMu         sync.Mutex
+	mfaChallenges map[string]*mfaChallenge
 }
 
 // Deps bundles the constructed dependencies (built by internal/server).
@@ -68,21 +75,22 @@ type Deps struct {
 // New builds the API server.
 func New(d Deps) (*Server, error) {
 	return &Server{
-		cfg:          d.Cfg,
-		log:          d.Log,
-		db:           d.DB,
-		userStore:    d.Users,
-		sessionMgr:   d.Sessions,
-		photoStore:   d.Photos,
-		albumStore:   d.Albums,
-		deviceStore:  d.Devices,
-		pairingStore: d.Pairing,
-		releaseStore: d.Releases,
-		store:        d.Storage,
-		auditRec:     d.Audit,
-		loginLimiter: d.LoginLimiter,
-		pipeOpts:     d.Pipeline,
-		mail:         d.Mail,
+		cfg:           d.Cfg,
+		log:           d.Log,
+		db:            d.DB,
+		userStore:     d.Users,
+		sessionMgr:    d.Sessions,
+		photoStore:    d.Photos,
+		albumStore:    d.Albums,
+		deviceStore:   d.Devices,
+		pairingStore:  d.Pairing,
+		releaseStore:  d.Releases,
+		store:         d.Storage,
+		auditRec:      d.Audit,
+		loginLimiter:  d.LoginLimiter,
+		pipeOpts:      d.Pipeline,
+		mail:          d.Mail,
+		mfaChallenges: make(map[string]*mfaChallenge),
 	}, nil
 }
 
@@ -97,6 +105,10 @@ func (s *Server) Router() http.Handler {
 	r.Route("/v1", func(v1 chi.Router) {
 		// Public (auth-free) routes.
 		v1.Post("/auth/login", s.handleLogin)
+		// The 2FA step: public like login (no session exists yet). The
+		// mfa_id is a 128-bit single-use token, so the absent CSRF check
+		// adds no attack surface (same reasoning as the login exemption).
+		v1.Post("/auth/mfa", s.handleMFA)
 		v1.With(s.requireAuth).Get("/auth/csrf", s.handleCSRF)
 
 		// Pairing protocol (M5, spec §12): frame-facing and public by
@@ -131,6 +143,12 @@ func (s *Server) Router() http.Handler {
 			g.Get("/auth/me", s.handleMe)
 			g.Post("/auth/password", s.handleChangePassword)
 			g.Patch("/auth/profile", s.handleUpdateProfile)
+
+			// Two-factor (self-service only; no admin override).
+			g.Get("/users/me/totp", s.handleTOTPStatus)
+			g.Post("/users/me/totp/enable", s.handleTOTPEnable)
+			g.Post("/users/me/totp/confirm", s.handleTOTPConfirm)
+			g.Post("/users/me/totp/disable", s.handleTOTPDisable)
 
 			g.With(requireAdmin).Get("/users", s.handleListUsers)
 			g.With(requireAdmin).Post("/users", s.handleCreateUser)

@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -60,6 +62,26 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if err != nil || !ok {
 		s.auditRec.Action(r.Context(), u.ID, "login.failed", "user", u.ID, ip, map[string]string{"reason": "bad_credentials"})
 		writeError(w, http.StatusUnauthorized, "bad_credentials", "invalid email or password")
+		return
+	}
+
+	// 2FA (TOTP): a correct password is not enough when the user has
+	// enabled two-factor. Hand the client a single-use challenge id;
+	// the session is created only after /auth/mfa verifies a code.
+	if _, enforced, err := s.userStore.TOTPEnforced(r.Context(), u.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal", "could not check two-factor state")
+		return
+	} else if enforced {
+		mfaID, err := s.newMFAChallenge(u.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal", "could not start two-factor check")
+			return
+		}
+		s.auditRec.Action(r.Context(), u.ID, "login.mfa_required", "user", u.ID, ip, nil)
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"mfa_required": true,
+			"mfa_id":       mfaID,
+		})
 		return
 	}
 
@@ -217,4 +239,145 @@ func mustDummyHash() string {
 		panic(err)
 	}
 	return h
+}
+
+// ---------------------------------------------------------------------
+// 2FA (TOTP) — the MFA step of login.
+
+// mfaChallenge is one pending 2FA step. Single-use, short-TTL, and
+// attempt-capped: after the cap the challenge is destroyed, so a
+// stolen mfa_id yields at most MFAAttemptsMax code guesses (each
+// 6-digit or 11-char — both effectively unguessable, the cap is
+// defence-in-depth plus audit noise control).
+type mfaChallenge struct {
+	userID    string
+	expiresAt time.Time
+	attempts  int
+}
+
+const (
+	mfaTTL         = 5 * time.Minute
+	mfaAttemptsMax = 10
+)
+
+func (s *Server) newMFAChallenge(userID string) (string, error) {
+	id := make([]byte, 16)
+	if _, err := rand.Read(id); err != nil {
+		return "", err
+	}
+	mfaID := hex.EncodeToString(id)
+	s.mfaMu.Lock()
+	// Opportunistic GC: drop expired challenges on the way in.
+	for k, ch := range s.mfaChallenges {
+		if time.Now().After(ch.expiresAt) {
+			delete(s.mfaChallenges, k)
+		}
+	}
+	s.mfaChallenges[mfaID] = &mfaChallenge{userID: userID, expiresAt: time.Now().Add(mfaTTL)}
+	s.mfaMu.Unlock()
+	return mfaID, nil
+}
+
+// POST /api/v1/auth/mfa  (public: no session exists yet)
+// Body: {"mfa_id": "...", "code": "123456" | "ABCDE-FGHIJ"}
+// 200: session cookie + {user, csrf_token, expires_at} (login shape)
+// 401: invalid challenge, or code did not verify
+// 429: attempt cap exceeded (challenge destroyed)
+func (s *Server) handleMFA(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		MFAID string `json:"mfa_id"`
+		Code  string `json:"code"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON body")
+		return
+	}
+	req.MFAID = strings.TrimSpace(req.MFAID)
+	req.Code = strings.TrimSpace(req.Code)
+	if req.MFAID == "" || req.Code == "" {
+		writeError(w, http.StatusBadRequest, "bad_request", "mfa_id and code are required")
+		return
+	}
+	ip := clientIP(r)
+
+	s.mfaMu.Lock()
+	ch, ok := s.mfaChallenges[req.MFAID]
+	if ok {
+		ch.attempts++
+	}
+	exceeded := ok && ch.attempts > mfaAttemptsMax
+	if ok && (time.Now().After(ch.expiresAt) || exceeded) {
+		delete(s.mfaChallenges, req.MFAID)
+	}
+	s.mfaMu.Unlock()
+
+	auditUser := func() string {
+		if ok {
+			return ch.userID
+		}
+		return ""
+	}
+
+	if !ok {
+		// Uniform error: expired/unknown/already-consumed are the same.
+		s.auditRec.Action(r.Context(), auditUser(), "login.mfa_failed", "user", auditUser(), ip, map[string]string{"reason": "invalid_challenge"})
+		writeError(w, http.StatusUnauthorized, "invalid_challenge", "this sign-in step has expired, sign in again")
+		return
+	}
+	if exceeded {
+		s.auditRec.Action(r.Context(), ch.userID, "login.mfa_locked", "user", ch.userID, ip, map[string]string{"reason": "attempt_cap"})
+		writeError(w, http.StatusTooManyRequests, "too_many_attempts", "too many two-factor attempts, sign in again")
+		return
+	}
+
+	// The secret is only fetched after the challenge checks pass, so a
+	// garbage mfa_id does not even touch the user's 2FA row.
+	secret, enforced, err := s.userStore.TOTPEnforced(r.Context(), ch.userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal", "could not check two-factor state")
+		return
+	}
+	var verified bool
+	var via string
+	switch {
+	case enforced && len(req.Code) == auth.TOTPDigits && auth.IsRecoveryCodeShape(req.Code) == false:
+		verified = auth.VerifyTOTP(secret, req.Code, time.Now())
+		via = "totp"
+	case auth.IsRecoveryCodeShape(req.Code):
+		verified, err = s.userStore.RedeemRecoveryCode(r.Context(), ch.userID, req.Code)
+		if err == nil {
+			via = "recovery"
+		}
+	default:
+		writeError(w, http.StatusUnauthorized, "bad_code", "enter the 6-digit code from your authenticator, or a recovery code")
+		return
+	}
+	if !verified {
+		s.auditRec.Action(r.Context(), ch.userID, "login.mfa_failed", "user", ch.userID, ip, map[string]string{"reason": "bad_code", "via": via})
+		writeError(w, http.StatusUnauthorized, "bad_code", "the code did not verify, try again")
+		return
+	}
+
+	// Consume the challenge (single-use) before creating the session.
+	s.mfaMu.Lock()
+	delete(s.mfaChallenges, req.MFAID)
+	s.mfaMu.Unlock()
+
+	u, err := s.userStore.Get(r.Context(), ch.userID)
+	if err != nil || u.DeactivatedAt != nil {
+		writeError(w, http.StatusUnauthorized, "invalid_session", "sign in required")
+		return
+	}
+	sess, err := s.sessionMgr.Create(r.Context(), u.ID, truncate(r.UserAgent(), 200), ip)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal", "could not create session")
+		return
+	}
+	s.setSessionCookie(w, sess.Token, sess.ExpiresAt)
+	s.auditRec.Action(r.Context(), u.ID, "login.mfa_succeeded", "user", u.ID, ip, map[string]string{"via": via})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"user":       publicUser(u),
+		"csrf_token": auth.DeriveCSRFToken(sess.Token),
+		"expires_at": sess.ExpiresAt.UTC().Format(time.RFC3339),
+	})
 }
