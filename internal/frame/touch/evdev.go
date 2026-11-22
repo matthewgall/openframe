@@ -21,9 +21,14 @@ const (
 	evKey     = 0x01
 	evAbs     = 0x03
 	synReport = 0x00
-	btnTouch  = 0x14b
-	absX      = 0x00
-	absY      = 0x01
+	// btnTouch is BTN_TOUCH's code, 0x14a. It used to say 0x14b, which
+	// is BTN_HAND — no real touchscreen ever sends it, so the parser
+	// saw no contacts and produced no gestures (on any hardware).
+	btnTouch       = 0x14a
+	absX           = 0x00
+	absY           = 0x01
+	absMTPositionX = 0x35
+	absMTPositionY = 0x36
 )
 
 // eventSize is sizeof(struct input_event) on 64-bit Linux:
@@ -72,6 +77,14 @@ var errShortRead = errors.New("touch: short read")
 type Device struct {
 	path string
 	f    *os.File
+
+	// Raw-axis calibration: axis ranges come from EVIOCGABS and the
+	// panel size from SetDisplaySize; samples are mapped linearly
+	// from raw units (e.g. a HID screen's 0..4096) to panel pixels.
+	// Unknown ranges mean the device is taken to report pixels.
+	xMin, xMax int
+	yMin, yMax int
+	w, h       int
 }
 
 // Open opens an evdev node for reading.
@@ -80,7 +93,52 @@ func Open(path string) (*Device, error) {
 	if err != nil {
 		return nil, fmt.Errorf("touch: open %s: %w", path, err)
 	}
-	return &Device{path: path, f: f}, nil
+	d := &Device{path: path, f: f}
+	if min, max, ok := axisRange(f, absX); ok {
+		d.xMin, d.xMax = min, max
+	}
+	if min, max, ok := axisRange(f, absY); ok {
+		d.yMin, d.yMax = min, max
+	}
+	return d, nil
+}
+
+// SetDisplaySize enables raw-unit to pixel calibration for samples
+// from this device.
+func (d *Device) SetDisplaySize(w, h int) { d.w, d.h = w, h }
+
+// calibrate maps raw axis values to panel pixels. Either calibration
+// is fully known (ranges + size) or the raw value passes through.
+func (d *Device) calibrate(x, y int) (int, int) {
+	if d.w <= 0 || d.h <= 0 || d.xMax <= d.xMin || d.yMax <= d.yMin {
+		return x, y
+	}
+	return scaleAxis(x, d.xMin, d.xMax, d.w), scaleAxis(y, d.yMin, d.yMax, d.h)
+}
+
+// scaleAxis maps raw from [min,max] linearly onto [0,size-1],
+// clamped. max<=min is treated as "already pixels": clamp only.
+func scaleAxis(raw, min, max, size int) int {
+	if size <= 0 {
+		return raw
+	}
+	if max <= min {
+		if raw < 0 {
+			return 0
+		}
+		if raw >= size {
+			return size - 1
+		}
+		return raw
+	}
+	v := int64(raw-min) * int64(size-1) / int64(max-min)
+	if v < 0 {
+		v = 0
+	}
+	if v > int64(size-1) {
+		v = int64(size - 1)
+	}
+	return int(v)
 }
 
 // Path returns the device node path.
@@ -128,31 +186,54 @@ func (d *Device) readFrame() ([]rawEvent, error) {
 }
 
 // SampleFrames converts a stream of raw events into finger Samples,
-// stamping each SYN-emitted sample with now(). Pure and testable.
+// stamping each SYN-emitted sample with now(). Stateless convenience
+// wrapper over positionTracker for a single batch of frames — use
+// (*positionTracker).frame for a live event stream.
 func SampleFrames(evs []rawEvent, now func() time.Time) []Sample {
+	var p positionTracker
+	return p.frame(evs, now)
+}
+
+// positionTracker holds contact state across evdev frames. This is
+// essential: real devices send each movement as its own
+// X/Y/BTN_TOUCH/SYN frame, and the releasing frame often carries only
+// BTN_TOUCH=0 (the kernel does not repeat the last position). A
+// stateless per-frame parser would drop every move sample and report
+// the finger-up at (0,0), collapsing all swipes to "whatever direction
+// points at the top-left corner" — observed on the HID 0712:000a
+// panel, where every swipe looked like DirLeft/DirUp.
+type positionTracker struct {
+	x, y    int
+	pressed bool
+}
+
+// Positions are tracked from the legacy ABS_X/ABS_Y axes and from the
+// Type-B MT axes (ABS_MT_POSITION_X/Y); hybrid devices emit both with
+// identical values, MT-only devices are handled too. Contact edges
+// come from BTN_TOUCH, which the kernel's MT emulation always mirrors
+// from slot state.
+func (p *positionTracker) frame(evs []rawEvent, now func() time.Time) []Sample {
 	var out []Sample
-	x, y := 0, 0
-	pressed := false
 	edgeDown, edgeUp := false, false
 	for _, e := range evs {
 		switch {
-		case e.Type == evAbs && e.Code == absX:
-			x = e.Value
-		case e.Type == evAbs && e.Code == absY:
-			y = e.Value
+		case e.Type == evAbs && (e.Code == absX || e.Code == absMTPositionX):
+			p.x = e.Value
+		case e.Type == evAbs && (e.Code == absY || e.Code == absMTPositionY):
+			p.y = e.Value
 		case e.Type == evKey && e.Code == btnTouch:
 			if e.Value == 1 {
-				pressed = true
+				p.pressed = true
 				edgeDown = true
 				edgeUp = false
 			} else {
-				pressed = false
+				p.pressed = false
 				edgeUp = true
 				edgeDown = false
 			}
 		case e.Type == evSyn && e.Code == synReport:
-			if pressed || edgeUp {
-				s := Sample{X: x, Y: y, T: now(), Up: edgeUp}
+			if p.pressed || edgeUp {
+				s := Sample{X: p.x, Y: p.y, T: now(), Up: edgeUp}
 				if edgeDown {
 					s.Down = true
 				}

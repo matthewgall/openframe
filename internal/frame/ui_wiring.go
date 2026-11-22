@@ -42,7 +42,6 @@ type uiState struct {
 	data      *frameData
 	mon       *thermal.Monitor
 	gestures  chan touch.Gesture
-	asleep    bool
 	throttled bool
 
 	// schedMu guards sched (written by the settings apply path on the
@@ -289,6 +288,9 @@ func (f *Frame) touchComponent(ctx context.Context) error {
 		}
 		defer dev.Close()
 		f.log.Info("touch device attached", "device", devPath)
+		// Raw HID axes (e.g. 0..4096) must land in panel pixels for the
+		// gesture hit-testing to work at any resolution.
+		dev.SetDisplaySize(f.drv.FrameSize())
 		samples = dev.Stream(ctx)
 	}
 
@@ -304,9 +306,16 @@ func (f *Frame) touchComponent(ctx context.Context) error {
 	return nil
 }
 
+// touchWakeGrace is how long a recent touch holds off scheduled sleep:
+// a tap wakes the frame (see ui.Engine gesture handling), and the
+// recipient should get a little time to browse before the panel dozes
+// again.
+const touchWakeGrace = 60 * time.Second
+
 // sleepComponent evaluates the daily sleep schedule once a second:
 // asleep turns the display off (backlight or black frame) while the
-// frame keeps running and syncing (spec §11).
+// frame keeps running and syncing (spec §11). A frame the recipient
+// just woke by touch stays awake for touchWakeGrace.
 func (f *Frame) sleepComponent(ctx context.Context) error {
 	eff := f.effectiveConfig()
 	if eff.Frame.Sleep.On == "" && eff.Frame.Sleep.Off == "" {
@@ -329,14 +338,14 @@ func (f *Frame) sleepComponent(ctx context.Context) error {
 			if !f.engine.Paired() {
 				asleep = false
 			}
-			if asleep == f.ui.asleep {
+			// Touch wins briefly over the schedule.
+			if asleep && f.ui.eng.RecentlyActive(touchWakeGrace) {
+				asleep = false
+			}
+			if asleep == f.ui.eng.Asleep() {
 				continue
 			}
-			f.ui.asleep = asleep
-			f.ui.eng.SetAsleep(asleep)
-			if err := f.drv.SetPower(ctx, !asleep); err != nil {
-				f.log.Warn("display power change failed", "on", !asleep, "error", err)
-			}
+			f.ui.eng.SetAsleep(asleep) // also drives display power
 			if asleep {
 				f.log.Info("frame sleeping (display off)")
 			} else {

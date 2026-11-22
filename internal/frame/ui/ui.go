@@ -369,12 +369,18 @@ func (e *Engine) SetThrottled(on bool) {
 	e.log.Info("thermal throttle", "on", on)
 }
 
-// SetAsleep is called by the sleep scheduler. The agent keeps running;
-// only the displayed content changes (the driver's power state is the
-// scheduler's job).
+// SetAsleep is called by the sleep scheduler and by the wake-on-touch
+// path in gesture handling. The agent keeps running; the sleep screen
+// replaces the UI and the display's power state follows the transition
+// (backlight where the hardware has one; a black sleep screen does the
+// visual work where it does not). Idempotent.
 func (e *Engine) SetAsleep(on bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.setAsleepLocked(on)
+}
+
+func (e *Engine) setAsleepLocked(on bool) {
 	if e.asleep == on {
 		return
 	}
@@ -383,7 +389,27 @@ func (e *Engine) SetAsleep(on bool) {
 	if !on {
 		e.screen = ScreenSlideshow
 	}
+	if err := e.drv.SetPower(context.Background(), !on); err != nil {
+		e.log.Warn("ui: display power change failed", "on", !on, "error", err)
+	}
 	e.render()
+}
+
+// Asleep reports the engine's sleep state (single source of truth for
+// the scheduler and health reporting).
+func (e *Engine) Asleep() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.asleep
+}
+
+// RecentlyActive reports whether a touch gesture arrived within dur.
+// The scheduler uses it to hold off scheduled sleep briefly after the
+// recipient wakes the frame by touching it.
+func (e *Engine) RecentlyActive(dur time.Duration) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.cfg.Now().Sub(e.lastActivity) < dur
 }
 
 // LastPresentError returns the most recent display present failure

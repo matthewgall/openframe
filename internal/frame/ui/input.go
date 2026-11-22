@@ -24,6 +24,14 @@ func (e *Engine) HandleGesture(g touch.Gesture) {
 // (the lock is not reentrant).
 func (e *Engine) handleGestureLocked(g touch.Gesture) {
 	e.lastActivity = g.T
+	if e.asleep {
+		// Wake-on-touch (spec §11 is silent; recipient expectation is
+		// that a tap revives the panel). The waking gesture is consumed
+		// — a tap to wake should not also toggle the controls overlay.
+		e.setAsleepLocked(false)
+		e.log.Info("frame awake (display on)", "cause", "touch")
+		return
+	}
 	switch g.Kind {
 	case touch.KindSwipe:
 		e.onSwipe(g.Dir)

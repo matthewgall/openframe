@@ -126,7 +126,7 @@ func (f *Frame) buildHealth(ctx context.Context) healthPayload {
 	}
 	if f.drv != nil {
 		h.DisplayDriver = f.drv.Name()
-		if f.ui != nil && f.ui.asleep {
+		if f.ui != nil && f.ui.eng != nil && f.ui.eng.Asleep() {
 			h.DisplayStatus = "asleep"
 		} else {
 			h.DisplayStatus = "active"

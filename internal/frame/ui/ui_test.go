@@ -627,6 +627,30 @@ func TestSleepScreen(t *testing.T) {
 	}
 }
 
+func TestWakeOnTouch(t *testing.T) {
+	photos := testPhotos(t, 1)
+	env := newUIEnv(t, photos, nil)
+	e := env.eng
+	e.SetAsleep(true)
+	// A gesture during sleep wakes the frame and is consumed (the tap
+	// must not also toggle the controls overlay behind the wake).
+	env.tap(400, 400)
+	if e.Asleep() {
+		t.Fatal("tap did not wake the frame")
+	}
+	if e.Screen() != ScreenSlideshow {
+		t.Fatalf("screen = %v, want slideshow after wake", e.Screen())
+	}
+	if !e.RecentlyActive(30 * time.Second) {
+		t.Error("RecentlyActive false right after a gesture")
+	}
+	// The grace window must expire once time moves past it.
+	env.nowAt(env.gestureT().Add(2 * time.Second))
+	if e.RecentlyActive(time.Second) {
+		t.Error("RecentlyActive should expire after the grace window")
+	}
+}
+
 func TestEmptyStates(t *testing.T) {
 	// Unpaired.
 	env := newUIEnv(t, nil, nil)

@@ -195,6 +195,109 @@ func TestGestureSmallSlowMoveIsNotSwipe(t *testing.T) {
 	}
 }
 
+func TestBtnTouchMatchesKernelHeader(t *testing.T) {
+	// BTN_TOUCH is 0x14a in linux/input-event-codes.h. The parser once
+	// used 0x14b (BTN_TOUCH+1, BTN_HAND), which made every real
+	// touchscreen invisible. Pin the constant to the header value.
+	if btnTouch != 0x14a {
+		t.Fatalf("btnTouch = 0x%x, kernel BTN_TOUCH is 0x14a", btnTouch)
+	}
+}
+
+func TestSampleFramesMTOnly(t *testing.T) {
+	// Type-B device: positions arrive on the MT axes only; the panel's
+	// BTN_TOUCH mirrors contact state.
+	evs := []rawEvent{
+		{evAbs, absMTPositionX, 300}, {evAbs, absMTPositionY, 400},
+		{evKey, btnTouch, 1}, {evSyn, synReport, 0},
+		{evAbs, absMTPositionX, 310}, {evSyn, synReport, 0},
+		{evKey, btnTouch, 0}, {evSyn, synReport, 0},
+	}
+	samples := SampleFrames(evs, func() time.Time { return time.Unix(0, 0) })
+	if len(samples) != 3 {
+		t.Fatalf("got %d samples, want 3", len(samples))
+	}
+	if samples[0].X != 300 || samples[0].Y != 400 || !samples[0].Down {
+		t.Errorf("down sample = %+v", samples[0])
+	}
+	if samples[1].X != 310 || samples[1].Y != 400 {
+		t.Errorf("move sample = %+v", samples[1])
+	}
+	if !samples[2].Up {
+		t.Errorf("up sample = %+v", samples[2])
+	}
+}
+
+func TestPositionTrackerAcrossFrames(t *testing.T) {
+	// Real evdev delivery: every readFrame call returns one SYN-terminated
+	// frame. The releasing frame carries BTN_TOUCH=0 and NO coordinates
+	// (exactly what the HID 0712:000a panel sends). A per-call stateless
+	// parse drops all movement and reports finger-up at (0,0), which made
+	// every swipe classify as "direction toward the top-left corner".
+	var p positionTracker
+	down := func() time.Time { return time.Unix(1, 0) }
+	move := func() time.Time { return time.Unix(2, 0) }
+	up := func() time.Time { return time.Unix(3, 0) }
+
+	f1 := p.frame([]rawEvent{
+		{evKey, btnTouch, 1}, {evAbs, absX, 3000}, {evAbs, absY, 100}, {evSyn, synReport, 0},
+	}, down)
+	f2 := p.frame([]rawEvent{
+		{evAbs, absX, 2900}, {evAbs, absY, 2500}, {evSyn, synReport, 0},
+	}, move)
+	f3 := p.frame([]rawEvent{
+		{evKey, btnTouch, 0}, {evSyn, synReport, 0},
+	}, up)
+
+	if len(f1) != 1 || !f1[0].Down || f1[0].X != 3000 || f1[0].Y != 100 {
+		t.Fatalf("down frame samples = %+v", f1)
+	}
+	if len(f2) != 1 || f2[0].Down || f2[0].Up || f2[0].X != 2900 || f2[0].Y != 2500 {
+		t.Fatalf("move frame samples = %+v (movement must be emitted while pressed)", f2)
+	}
+	if len(f3) != 1 || !f3[0].Up {
+		t.Fatalf("up frame samples = %+v", f3)
+	}
+	// The up position must be the last known position, NOT (0,0).
+	if f3[0].X != 2900 || f3[0].Y != 2500 {
+		t.Fatalf("up sample = (%d,%d), want held position (2900,2500)", f3[0].X, f3[0].Y)
+	}
+
+	// End-to-end through the recognizer: this trace is a DOWN swipe
+	// (y 100 -> 2500). It must not be classified as a corner direction.
+	rec := NewRecognizer(Options{})
+	var gestures []Gesture
+	for _, group := range [][]Sample{f1, f2, f3} {
+		for _, s := range group {
+			gestures = append(gestures, rec.Feed(s)...)
+		}
+	}
+	if len(gestures) != 1 || gestures[0].Kind != KindSwipe || gestures[0].Dir != DirDown {
+		t.Fatalf("gestures = %+v, want one down-swipe", gestures)
+	}
+}
+
+func TestScaleAxis(t *testing.T) {
+	cases := []struct {
+		raw, min, max, size, want int
+		why                       string
+	}{
+		{0, 0, 4096, 1920, 0, "left edge"},
+		{4096, 0, 4096, 1920, 1919, "right edge"},
+		{2048, 0, 4096, 1920, 959, "centre (truncating)"},
+		{5000, 0, 4096, 1920, 1919, "clamped high"},
+		{-10, 0, 4096, 1920, 0, "clamped low"},
+		{100, 0, 0, 1920, 100, "no axis info: passthrough"},
+		{1920, 0, 1919, 1920, 1919, "pixel-reporting device: clamp"},
+		{100, 10, 110, 500, 449, "offset range"},
+	}
+	for _, c := range cases {
+		if got := scaleAxis(c.raw, c.min, c.max, c.size); got != c.want {
+			t.Errorf("scaleAxis(%d,%d,%d,%d) = %d, want %d (%s)", c.raw, c.min, c.max, c.size, got, c.want, c.why)
+		}
+	}
+}
+
 func TestFindTouchscreen(t *testing.T) {
 	root := t.TempDir()
 	sys := filepath.Join(root, "sys", "class", "input")

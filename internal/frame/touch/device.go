@@ -17,13 +17,18 @@ func (d *Device) Stream(ctx context.Context) <-chan Sample {
 	ch := make(chan Sample, 64)
 	go func() {
 		defer close(ch)
+		var pos positionTracker
 		for {
 			evs, err := d.readFrame()
 			if err != nil {
 				return
 			}
-			samples := SampleFrames(evs, time.Now)
+			// One tracker for the whole stream: contact state and the
+			// last position must survive across frame reads (the
+			// releasing frame usually carries no coordinates).
+			samples := pos.frame(evs, time.Now)
 			for _, s := range samples {
+				s.X, s.Y = d.calibrate(s.X, s.Y)
 				select {
 				case ch <- s:
 				case <-ctx.Done():
