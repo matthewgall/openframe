@@ -38,6 +38,17 @@ func (c *Config) Validate() error {
 	if c.Server.LoginRateLimitPerMin < 1 || c.Server.LoginRateLimitPerMin > 1000 {
 		return fmt.Errorf("server.login_rate_limit_per_min must be in [1, 1000]")
 	}
+	if c.Server.AdminEmail != "" && !strings.Contains(c.Server.AdminEmail, "@") {
+		return fmt.Errorf("server.admin_email looks like an address but has no '@'")
+	}
+	if c.Server.Email.Enabled {
+		if c.Server.Email.Host == "" {
+			return fmt.Errorf("server.email.host is required when server.email.enabled")
+		}
+		if c.Server.Email.Port <= 0 || c.Server.Email.Port > 65535 {
+			return fmt.Errorf("server.email.port must be in [1, 65535]")
+		}
+	}
 
 	switch c.Server.PhotoStorage.Backend {
 	case "", "local":

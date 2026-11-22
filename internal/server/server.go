@@ -31,6 +31,7 @@ import (
 	"github.com/matthewgall/openframe/internal/server/audit"
 	"github.com/matthewgall/openframe/internal/server/auth"
 	"github.com/matthewgall/openframe/internal/server/devices"
+	"github.com/matthewgall/openframe/internal/server/email"
 	"github.com/matthewgall/openframe/internal/server/pairing"
 	"github.com/matthewgall/openframe/internal/server/photos"
 	"github.com/matthewgall/openframe/internal/server/releases"
@@ -47,6 +48,7 @@ type Server struct {
 	db        *sql.DB
 	api       *api.Server
 	userStore *users.Store
+	mail      *email.Sender
 	httpS     *http.Server
 	start     time.Time
 }
@@ -81,11 +83,16 @@ func New(cfg *config.Config, log *slog.Logger, dbh *sql.DB) (*Server, error) {
 
 	userStore := users.NewStore(dbh)
 	serverDir, _, _ := cfg.Paths()
+	mail := email.New(log, cfg.Server.Email, cfg.Server.AdminEmail)
+	if cfg.Server.Email.Enabled {
+		log.Info("email notifications enabled", "host", cfg.Server.Email.Host, "port", cfg.Server.Email.Port, "to", cfg.Server.AdminEmail)
+	}
 	apiSrv, err := api.New(api.Deps{
 		Cfg:          cfg,
 		Log:          log,
 		DB:           dbh,
 		Users:        userStore,
+		Mail:         mail,
 		Sessions:     auth.NewManager(dbh, cfg.Server.SessionTTL),
 		Photos:       photos.NewStore(dbh),
 		Albums:       albums.NewStore(dbh),
@@ -107,6 +114,7 @@ func New(cfg *config.Config, log *slog.Logger, dbh *sql.DB) (*Server, error) {
 		db:        dbh,
 		api:       apiSrv,
 		userStore: users.NewStore(dbh),
+		mail:      mail,
 		start:     time.Now(),
 	}, nil
 }
@@ -198,13 +206,19 @@ func (s *Server) ListenAddr() string { return s.cfg.Server.Listen }
 // bootstrapFirstAdmin implements the easy-first-run promise (spec §2):
 // on a brand-new installation (no active users), an initial
 // administrator is created with a generated temporary password and the
-// credential is logged exactly once at Info level.
+// credential is delivered exactly once:
 //
-// This is the single documented exception to the "no secrets in logs"
-// rule (ADR-0010): the value is a one-time recovery credential for an
-// account that does not yet exist and must be changed. It is logged
-// once, attributed to this server, and never repeated (subsequent
-// startups take the no-op path).
+//   - email enabled and the send succeeds: the password goes to
+//     server.admin_email, and the journal gets NO secret;
+//   - email disabled, or the send fails: the password is logged at
+//     Info level (the documented fallback — a mail outage must never
+//     strand a fresh install without the credential).
+//
+// The log path is the single documented exception to the "no secrets
+// in logs" rule (ADR-0010): the value is a one-time recovery
+// credential for an account that does not yet exist and must be
+// changed. It is never repeated (subsequent startups take the no-op
+// path).
 func (s *Server) bootstrapFirstAdmin(ctx context.Context) error {
 	n, err := s.userStore.CountActive(ctx)
 	if err != nil {
@@ -217,9 +231,38 @@ func (s *Server) bootstrapFirstAdmin(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("generate temporary password: %w", err)
 	}
-	u, err := s.userStore.Create(ctx, "admin@localhost", "Administrator", users.RoleAdmin, tmp)
+	u, err := s.userStore.Create(ctx, s.cfg.Server.AdminEmail, "Administrator", users.RoleAdmin, tmp)
 	if err != nil {
 		return fmt.Errorf("create initial admin: %w", err)
+	}
+
+	subject := "OpenFrame: your one-time administrator password"
+	body := fmt.Sprintf(`A new OpenFrame server has been initialised and an administrator account was created.
+
+Email:    %s
+Password: %s
+
+This password is one-time: sign in and change it immediately
+(Account -> Settings -> Security). If you did not install a new
+OpenFrame server, ignore this message and investigate, because
+someone has.
+`, u.Email, tmp)
+
+	delivered := false
+	if s.mail.Enabled() {
+		if err := s.mail.Send(ctx, subject, body); err != nil {
+			// Fallback: the journal. A mail outage must never leave a
+			// fresh install unreachable.
+			s.log.Error("first run: email delivery failed; falling back to journal log entry",
+				"error", err)
+		} else {
+			delivered = true
+		}
+	}
+	if delivered {
+		s.log.Info("first run: created initial administrator (one-time temporary password delivered by email — change it after login)",
+			"first_run", true, "email", u.Email)
+		return nil
 	}
 	s.log.Info("first run: created initial administrator (one-time temporary password — change it after login)",
 		"first_run", true,

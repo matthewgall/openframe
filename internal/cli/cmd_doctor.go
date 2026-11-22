@@ -118,6 +118,9 @@ func runDoctor(args []string) int {
 	// 6b. Photo object storage reachability (local dir / S3 bucket).
 	checkPhotoStorage(cfg, add)
 
+	// 6b. Outbound mail (first-run credentials + 2FA recovery codes).
+	emailCheck(cfg, add)
+
 	// 7. Display detection (platform-split: the DRM backend is
 	//    Linux-only; other platforms report the headless fallback).
 	checkDisplay(add)

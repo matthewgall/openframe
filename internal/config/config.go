@@ -58,9 +58,41 @@ type ServerConfig struct {
 	MaxDecodeDimension   int           `yaml:"max_decode_dimension"`     // px, decoded image cap (default 8000)
 	LoginRateLimitPerMin int           `yaml:"login_rate_limit_per_min"` // per IP (default 5)
 
+	// AdminEmail is the first-run administrator's address: the account
+	// is created under it and (when email is enabled) the one-time
+	// temporary password is delivered there instead of the journal.
+	AdminEmail string `yaml:"admin_email"`
+
+	// Email configures the outbound SMTP for notifications. Delivery is
+	// best-effort and never blocks the server (see EmailConfig).
+	Email EmailConfig `yaml:"email"`
+
 	// PhotoStorage selects the object backend for photo originals and
 	// derivatives (default "local": DataDir/server/photos).
 	PhotoStorage PhotoStorageConfig `yaml:"photo_storage"`
+}
+
+// EmailConfig configures outbound SMTP (notifications: first-run
+// credentials, 2FA recovery codes).
+//
+// Best-effort contract: a misconfigured or unreachable mail server must
+// NEVER prevent the server from starting, block a request, or lose a
+// credential. Every send is timeout-bounded; first-run credentials fall
+// back to the one-time journal log entry when the send fails.
+type EmailConfig struct {
+	Enabled  bool   `yaml:"enabled"`
+	Host     string `yaml:"host"`
+	Port     int    `yaml:"port"` // 587 (STARTTLS, default) | 465 (implicit TLS) | 25
+	Username string `yaml:"username"`
+	// Password is the SMTP credential. Prefer the environment variable
+	// OPENFRAME_SERVER_EMAIL_PASSWORD in shared deployments.
+	Password string `yaml:"password"`
+	// From is the From header, e.g. "OpenFrame <frame@example.tld>".
+	// Defaults to the admin email address when unset.
+	From string `yaml:"from"`
+	// StartTLS upgrades non-465 connections when the server advertises
+	// it (default true for port 587).
+	StartTLS bool `yaml:"start_tls"`
 }
 
 // PhotoStorageConfig selects and configures the photo object backend.
@@ -267,6 +299,7 @@ func Default() *Config {
 			MaxUploadFiles:       50,
 			MaxDecodeDimension:   8000,
 			LoginRateLimitPerMin: 5,
+			AdminEmail:           "admin@localhost",
 			PhotoStorage:         PhotoStorageConfig{Backend: "local"},
 		},
 		Frame: FrameConfig{

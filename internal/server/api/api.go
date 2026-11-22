@@ -13,6 +13,7 @@ import (
 	"github.com/matthewgall/openframe/internal/server/audit"
 	"github.com/matthewgall/openframe/internal/server/auth"
 	"github.com/matthewgall/openframe/internal/server/devices"
+	"github.com/matthewgall/openframe/internal/server/email"
 	"github.com/matthewgall/openframe/internal/server/pairing"
 	"github.com/matthewgall/openframe/internal/server/photos"
 	"github.com/matthewgall/openframe/internal/server/releases"
@@ -42,6 +43,7 @@ type Server struct {
 	auditRec     *audit.Recorder
 	loginLimiter *auth.RateLimiter
 	pipeOpts     photos.Options
+	mail         *email.Sender
 }
 
 // Deps bundles the constructed dependencies (built by internal/server).
@@ -60,6 +62,7 @@ type Deps struct {
 	Audit        *audit.Recorder
 	LoginLimiter *auth.RateLimiter
 	Pipeline     photos.Options
+	Mail         *email.Sender
 }
 
 // New builds the API server.
@@ -79,6 +82,7 @@ func New(d Deps) (*Server, error) {
 		auditRec:     d.Audit,
 		loginLimiter: d.LoginLimiter,
 		pipeOpts:     d.Pipeline,
+		mail:         d.Mail,
 	}, nil
 }
 
