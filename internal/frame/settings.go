@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/matthewgall/openframe/internal/config"
@@ -87,10 +88,10 @@ func applyLocalSettings(c *config.FrameConfig, s map[string]string) error {
 		c.Display.Orientation = v
 	}
 	if v, ok := s[settingSleepOn]; ok {
-		c.Sleep.On = v
+		c.Sleep.On = normalizeSleepTime(v)
 	}
 	if v, ok := s[settingSleepOff]; ok {
-		c.Sleep.Off = v
+		c.Sleep.Off = normalizeSleepTime(v)
 	}
 	if v, ok := s[settingShowCaption]; ok {
 		b, err := strconv.ParseBool(v)
@@ -113,4 +114,19 @@ func applyLocalSettings(c *config.FrameConfig, s map[string]string) error {
 		c.Update.Channel = v
 	}
 	return nil
+}
+
+// normalizeSleepTime accepts both the canonical HH:MM form and the
+// bare-minutes form that applyUIState persisted before it was fixed
+// ("420"). Frames with poisoned settings heal on next load instead of
+// crash-looping on "sleep schedule: want HH:MM". Anything else passes
+// through so the scheduler surfaces its own error.
+func normalizeSleepTime(v string) string {
+	if strings.Contains(v, ":") {
+		return v
+	}
+	if m, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && m >= 0 && m < 1440 {
+		return fmt.Sprintf("%02d:%02d", m/60, m%60)
+	}
+	return v
 }

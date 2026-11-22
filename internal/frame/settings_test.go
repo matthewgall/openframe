@@ -58,6 +58,39 @@ func TestLocalSettingsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestApplyLocalSettingsHealsMinuteFormSleep(t *testing.T) {
+	// applyUIState once persisted sleep times as minutes ("420"),
+	// which made the scheduler reject the setting on the next boot
+	// ("want HH:MM") and crash-loop the frame. Loading must repair
+	// the legacy form instead of poisoning startup.
+	for k, pair := range map[string][2]string{
+		settingSleepOn:  {"420", "07:00"},
+		settingSleepOff: {"1320", "22:00"},
+	} {
+		c := config.Default().Frame
+		if err := applyLocalSettings(&c, map[string]string{k: pair[0]}); err != nil {
+			t.Fatalf("%s: %v", k, err)
+		}
+		got := c.Sleep.On
+		if k == settingSleepOff {
+			got = c.Sleep.Off
+		}
+		if got != pair[1] {
+			t.Errorf("%s minutes-form = %q, want %q", k, got, pair[1])
+		}
+	}
+	// Canonical form passes through untouched.
+	c := config.Default().Frame
+	if err := applyLocalSettings(&c, map[string]string{settingSleepOn: "06:30"}); err != nil || c.Sleep.On != "06:30" {
+		t.Errorf("canonical form: %q err=%v", c.Sleep.On, err)
+	}
+	// Out-of-range bare numbers are left alone (scheduler reports).
+	c = config.Default().Frame
+	if err := applyLocalSettings(&c, map[string]string{settingSleepOn: "99999"}); err != nil || c.Sleep.On != "99999" {
+		t.Errorf("garbage passthrough: %q err=%v", c.Sleep.On, err)
+	}
+}
+
 func TestApplyLocalSettingsRejectsGarbage(t *testing.T) {
 	cases := map[string]string{
 		settingBrightness:        "0.9z",

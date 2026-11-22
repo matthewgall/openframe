@@ -184,8 +184,12 @@ func (f *Frame) applyUIState(st ui.Settings) error {
 	save(settingSlideshowInterval, st.SlideshowInterval.String())
 	save(settingTransition, st.Transition)
 	save(settingOrientation, fmt.Sprintf("%d", st.Orientation))
-	save(settingSleepOn, fmt.Sprintf("%d", st.SleepOn))
-	save(settingSleepOff, fmt.Sprintf("%d", st.SleepOff))
+	// Sleep times persist in the SAME HH:MM form the config file and
+	// the scheduler use. Saving minutes here crashed the next boot
+	// ("sleep schedule: want HH:MM") and every settings apply
+	// silently poisoned frame.db until then.
+	save(settingSleepOn, minutesToHM(st.SleepOn))
+	save(settingSleepOff, minutesToHM(st.SleepOff))
 	save(settingShowCaption, fmt.Sprintf("%t", st.ShowCaption))
 	save(settingShowClock, fmt.Sprintf("%t", st.ShowClock))
 
