@@ -117,7 +117,7 @@ func (f *Font) glyph(r rune, col color.NRGBA) *image.NRGBA {
 			if a == 0 {
 				continue
 			}
-			c := color.NRGBA{col.R, col.G, col.B, a}
+			c := color.NRGBA{R: col.R, G: col.G, B: col.B, A: a}
 			for dy := 0; dy < f.scale; dy++ {
 				for dx := 0; dx < f.scale; dx++ {
 					out.SetNRGBA(sx*f.scale+dx, sy*f.scale+dy, c)

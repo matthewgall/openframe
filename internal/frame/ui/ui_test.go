@@ -224,8 +224,8 @@ func TestSlideshowCaptionBarOnlyWithCaptionOrDate(t *testing.T) {
 	naked := Photo{
 		Hash:        "hn",
 		Name:        "IMG_20260101_000000.jpg",
-		DisplayPath: writePhoto(t, color.NRGBA{200, 30, 30, 255}),
-		ThumbPath:   writePhoto(t, color.NRGBA{200, 30, 30, 255}),
+		DisplayPath: writePhoto(t, color.NRGBA{R: 200, G: 30, B: 30, A: 255}),
+		ThumbPath:   writePhoto(t, color.NRGBA{R: 200, G: 30, B: 30, A: 255}),
 	}
 	env := newUIEnv(t, []Photo{naked}, nil)
 	if p := env.px(640, 790); p.R < 150 || p.G > 100 {
@@ -236,8 +236,8 @@ func TestSlideshowCaptionBarOnlyWithCaptionOrDate(t *testing.T) {
 		Hash:        "hd",
 		Name:        "IMG_20260101_000001.jpg",
 		CaptureDate: time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC),
-		DisplayPath: writePhoto(t, color.NRGBA{200, 30, 30, 255}),
-		ThumbPath:   writePhoto(t, color.NRGBA{200, 30, 30, 255}),
+		DisplayPath: writePhoto(t, color.NRGBA{R: 200, G: 30, B: 30, A: 255}),
+		ThumbPath:   writePhoto(t, color.NRGBA{R: 200, G: 30, B: 30, A: 255}),
 	}
 	env2 := newUIEnv(t, []Photo{dated}, nil)
 	if p := env2.px(640, 790); p.R > 150 {

@@ -98,6 +98,45 @@ func TestModeInfoFieldOffsets(t *testing.T) {
 	}
 }
 
+func TestWriteXRGB8888(t *testing.T) {
+	// NRGBA Pix bytes are [R,G,B,A]; XRGB8888 is [B,G,R,X].
+	w, h := 3, 2
+	src := make([]byte, 0, w*h*4)
+	for i := 0; i < w*h; i++ {
+		src = append(src, byte(10*i+1), byte(10*i+2), byte(10*i+3), 0xFF) // R,G,B,A
+	}
+	dstPitch := w*4 + 4 // padded pitch on purpose
+	dst := make([]byte, h*dstPitch)
+	writeXRGB8888(dst, src, w, h, dstPitch)
+
+	for i := 0; i < w*h; i++ {
+		r, g, b := src[i*4], src[i*4+1], src[i*4+2]
+		d := (i % w) * 4
+		row := i / w
+		if dst[row*dstPitch+d] != b {
+			t.Errorf("pixel %d: B slot = %d, want %d", i, dst[row*dstPitch+d], b)
+		}
+		if dst[row*dstPitch+d+1] != g {
+			t.Errorf("pixel %d: G slot = %d, want %d", i, dst[row*dstPitch+d+1], g)
+		}
+		if dst[row*dstPitch+d+2] != r {
+			t.Errorf("pixel %d: R slot = %d, want %d", i, dst[row*dstPitch+d+2], r)
+		}
+		if dst[row*dstPitch+d+3] != 0 {
+			t.Errorf("pixel %d: X slot = %d, want 0", i, dst[row*dstPitch+d+3])
+		}
+	}
+
+	// Sanity: opaque pure red [ff,00,00,ff] must come out as
+	// [00,00,ff,00] — red in the red slot, nothing in blue.
+	red := []byte{0xFF, 0x00, 0x00, 0xFF}
+	one := make([]byte, 4)
+	writeXRGB8888(one, red, 1, 1, 4)
+	if one[0] != 0 || one[1] != 0 || one[2] != 0xFF || one[3] != 0 {
+		t.Errorf("pure red -> % x, want 00 00 ff 00", one)
+	}
+}
+
 func TestSelectMode(t *testing.T) {
 	mk := func(name string, w, h, refresh int, mtype uint32) modeInfo {
 		var m modeInfo

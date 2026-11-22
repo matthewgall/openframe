@@ -123,7 +123,7 @@ func (c *Canvas) FillRect(x, y, w, h int, col color.NRGBA) {
 			outR := (int(col.R)*a + int(d.R)*da*inv/255) / outA
 			outG := (int(col.G)*a + int(d.G)*da*inv/255) / outA
 			outB := (int(col.B)*a + int(d.B)*da*inv/255) / outA
-			c.img.SetNRGBA(xx, yy, color.NRGBA{uint8(outR), uint8(outG), uint8(outB), uint8(outA)})
+			c.img.SetNRGBA(xx, yy, color.NRGBA{R: uint8(outR), G: uint8(outG), B: uint8(outB), A: uint8(outA)})
 		}
 	}
 }
@@ -215,7 +215,10 @@ func (c *Canvas) Fit(src image.Image, w, h int, mode FitMode) *image.NRGBA {
 	// not as transparency that would leak whatever was under the
 	// photo.
 	out := image.NewNRGBA(image.Rect(0, 0, w, h))
-	for i := 0; i+3 < len(out.Pix); i += 4 {
+	// Opaque black base: contain letterboxes must present as black,
+	// not as transparency. NRGBA Pix is [R,G,B,A] in memory, so the
+	// alpha byte is index 3.
+	for i := 0; i+4 <= len(out.Pix); i += 4 {
 		out.Pix[i+3] = 255
 	}
 	sb := src.Bounds()

@@ -487,6 +487,34 @@ func rotationBit(degrees int) uint64 {
 	return 0
 }
 
+// writeXRGB8888 converts an image.NRGBA pixel buffer into the dumb
+// buffer's XRGB8888 layout. NRGBA Pix bytes are [R,G,B,A] (see the
+// image.NRGBA docs; on Go >= 1.25 alpha is the FOURTH byte, not the
+// first); XRGB8888 bytes on little-endian are [B,G,R,X]. So this is
+// an R/B swap with G in place and alpha ignored. A raw copy swaps
+// R and B (red cars render blue); assuming [A,R,G,B] puts alpha
+// (255) into the blue slot (blue cast over everything). The unit
+// test pins the byte order.
+func writeXRGB8888(dst, src []byte, w, h, dstPitch int) {
+	if len(src) < h*w*4 {
+		panic(fmt.Sprintf("drm: source pixel buffer %d bytes, want %d", len(src), h*w*4))
+	}
+	if len(dst) < h*dstPitch {
+		panic(fmt.Sprintf("drm: dumb buffer %d bytes, want %d", len(dst), h*dstPitch))
+	}
+	for y := 0; y < h; y++ {
+		s := src[y*w*4 : (y+1)*w*4]
+		t := dst[y*dstPitch : y*dstPitch+w*4]
+		for x := 0; x < w*4; x += 4 {
+			// src [R,G,B,A] -> dst [B,G,R,X]
+			t[x] = s[x+2]
+			t[x+1] = s[x+1]
+			t[x+2] = s[x]
+			t[x+3] = 0
+		}
+	}
+}
+
 // u64Ptr returns the address of a non-empty slice's backing array as a
 // user pointer for a DRM "_ptr" field. The caller must keep the slice
 // alive for the duration of the ioctl (it does: same goroutine).
@@ -598,11 +626,8 @@ func (d *Driver) PresentFrame(_ context.Context, img *image.NRGBA) error {
 		return fmt.Errorf("drm: frame is %dx%d, want %dx%d", img.Bounds().Dx(), img.Bounds().Dy(), d.width, d.height)
 	}
 	pitch := int(d.dumbPitch)
-	pixelRow := d.width * 4
-	for y := 0; y < d.height; y++ {
-		dst := d.buf[y*pitch : (y+1)*pitch]
-		copy(dst[:pixelRow], img.Pix[y*pixelRow:(y+1)*pixelRow])
-	}
+	writeXRGB8888(d.buf, img.Pix, d.width, d.height, pitch)
+
 	newFB, err := d.addFB()
 	if err != nil {
 		return err

@@ -57,7 +57,7 @@ func TestHeadlessLifecycle(t *testing.T) {
 	h := NewHeadless(testLog(), 1280, 800)
 
 	// PresentFrame before Init must fail.
-	if err := h.PresentFrame(ctx, solidFrame(1280, 800, color.NRGBA{1, 2, 3, 255})); err == nil {
+	if err := h.PresentFrame(ctx, solidFrame(1280, 800, color.NRGBA{R: 1, G: 2, B: 3, A: 255})); err == nil {
 		t.Error("PresentFrame before Init should fail")
 	}
 
@@ -65,11 +65,11 @@ func TestHeadlessLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Wrong-size frame is rejected.
-	if err := h.PresentFrame(ctx, solidFrame(10, 10, color.NRGBA{0, 0, 0, 255})); err == nil {
+	if err := h.PresentFrame(ctx, solidFrame(10, 10, color.NRGBA{R: 0, G: 0, B: 0, A: 255})); err == nil {
 		t.Error("wrong-size frame should fail")
 	}
 
-	f := solidFrame(1280, 800, color.NRGBA{9, 8, 7, 255})
+	f := solidFrame(1280, 800, color.NRGBA{R: 9, G: 8, B: 7, A: 255})
 	if err := h.PresentFrame(ctx, f); err != nil {
 		t.Fatal(err)
 	}
@@ -78,12 +78,12 @@ func TestHeadlessLifecycle(t *testing.T) {
 	}
 	// The driver must have copied the pixels: mutating the source
 	// after present does not change what the driver holds.
-	f.SetNRGBA(10, 10, color.NRGBA{200, 200, 200, 255})
+	f.SetNRGBA(10, 10, color.NRGBA{R: 200, G: 200, B: 200, A: 255})
 	p, err := h.LastFramePixel(10, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p != (color.NRGBA{9, 8, 7, 255}) {
+	if p != (color.NRGBA{R: 9, G: 8, B: 7, A: 255}) {
 		t.Errorf("pixel after source mutation = %v, want copied value", p)
 	}
 
@@ -150,7 +150,7 @@ func TestHeadlessSnapshots(t *testing.T) {
 	}
 	defer h.Close()
 
-	if err := h.PresentFrame(ctx, solidFrame(64, 32, color.NRGBA{12, 34, 56, 255})); err != nil {
+	if err := h.PresentFrame(ctx, solidFrame(64, 32, color.NRGBA{R: 12, G: 34, B: 56, A: 255})); err != nil {
 		t.Fatal(err)
 	}
 	// latest.png must exist and decode to the presented colour.
@@ -191,7 +191,7 @@ func TestHeadlessSnapshotDirFailureDegrades(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer h.Close()
-	if err := h.PresentFrame(context.Background(), solidFrame(64, 32, color.NRGBA{1, 1, 1, 255})); err != nil {
+	if err := h.PresentFrame(context.Background(), solidFrame(64, 32, color.NRGBA{R: 1, G: 1, B: 1, A: 255})); err != nil {
 		t.Errorf("present with bad snapshot dir should still work: %v", err)
 	}
 }

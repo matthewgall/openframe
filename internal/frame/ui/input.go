@@ -471,5 +471,5 @@ func blit(dst, src *image.NRGBA) {
 
 // darkRect draws a semi-transparent black band (chrome).
 func darkRect(e *Engine, x, y, w, h int, alpha uint8) {
-	e.cv.FillRect(x, y, w, h, color.NRGBA{0, 0, 0, alpha})
+	e.cv.FillRect(x, y, w, h, color.NRGBA{R: 0, G: 0, B: 0, A: alpha})
 }

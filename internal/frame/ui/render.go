@@ -14,11 +14,11 @@ import (
 
 // Palette: high-contrast, accessible (spec §10).
 var (
-	colBg     = color.NRGBA{0, 0, 0, 255}
-	colText   = color.NRGBA{255, 255, 255, 255}
-	colDim    = color.NRGBA{170, 170, 170, 255}
-	colAccent = color.NRGBA{255, 196, 0, 255} // warm highlight (star, focus)
-	colButton = color.NRGBA{255, 255, 255, 46}
+	colBg     = color.NRGBA{R: 0, G: 0, B: 0, A: 255}
+	colText   = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+	colDim    = color.NRGBA{R: 170, G: 170, B: 170, A: 255}
+	colAccent = color.NRGBA{R: 255, G: 196, B: 0, A: 255} // warm highlight (star, focus)
+	colButton = color.NRGBA{R: 255, G: 255, B: 255, A: 46}
 )
 
 const (
@@ -92,7 +92,7 @@ func (e *Engine) renderSlideshow() {
 	} else {
 		// Placeholder tile for an undecodable file.
 		e.cv.Fill(colBg)
-		e.cv.FillRect(e.w/2-160, e.h/2-40, 320, 80, color.NRGBA{40, 40, 40, 255})
+		e.cv.FillRect(e.w/2-160, e.h/2-40, 320, 80, color.NRGBA{R: 40, G: 40, B: 40, A: 255})
 		e.drawCentered(fontBody, e.h/2-12, "image unavailable", colDim)
 	}
 
@@ -120,14 +120,14 @@ func (e *Engine) drawClock() {
 	w := f.Width(s)
 	x := e.w - w - margin*2
 	y := margin
-	e.cv.FillRect(x-8, y-6, w+16, f.CellH()+12, color.NRGBA{0, 0, 0, 140})
+	e.cv.FillRect(x-8, y-6, w+16, f.CellH()+12, color.NRGBA{R: 0, G: 0, B: 0, A: 140})
 	f.DrawText(e.cv.Image(), x, y, s, colText)
 }
 
 func (e *Engine) drawCaption(p *Photo) {
 	barH := 96
 	y := e.h - barH
-	e.cv.FillRect(0, y, e.w, barH, color.NRGBA{0, 0, 0, 160})
+	e.cv.FillRect(0, y, e.w, barH, color.NRGBA{R: 0, G: 0, B: 0, A: 160})
 	f := e.cv.Font(fontBody)
 	// The caption leads and the capture date is the sub-line. The
 	// filename is deliberately absent from the frame: it is storage
@@ -156,8 +156,8 @@ func (e *Engine) drawCaption(p *Photo) {
 }
 
 func (e *Engine) drawControls(p *Photo) {
-	e.cv.FillRect(0, e.h-margin-88, e.w, margin+88, color.NRGBA{0, 0, 0, 200})
-	e.cv.FillRect(0, 0, e.w, margin+48, color.NRGBA{0, 0, 0, 160})
+	e.cv.FillRect(0, e.h-margin-88, e.w, margin+88, color.NRGBA{R: 0, G: 0, B: 0, A: 200})
+	e.cv.FillRect(0, 0, e.w, margin+48, color.NRGBA{R: 0, G: 0, B: 0, A: 160})
 	// Photo name in the top bar.
 	e.cv.Font(fontBody).DrawText(e.cv.Image(), margin, margin+8, truncate(p.Name, 44), colText)
 
@@ -268,7 +268,7 @@ func (e *Engine) renderWifiSetupHint() {
 	bw := 320
 	x := (e.w - bw) / 2
 	y := e.h/2 + 170
-	e.cv.FillRect(x, y, bw, 56, color.NRGBA{255, 255, 255, 20})
+	e.cv.FillRect(x, y, bw, 56, color.NRGBA{R: 255, G: 255, B: 255, A: 20})
 	e.cv.Font(fontBody).DrawText(e.cv.Image(), x+(bw-e.cv.Font(fontBody).Width(label))/2, y+16, label, colAccent)
 	e.buttons = append(e.buttons, hitButton{label: label, rect: [4]int{x, y, x + bw, y + 56}, kind: btnWifiSetup})
 }
@@ -286,7 +286,7 @@ func (e *Engine) renderDetails() {
 	}
 	// Panel.
 	by := ph
-	e.cv.FillRect(0, by, e.w, e.h-by, color.NRGBA{24, 24, 24, 255})
+	e.cv.FillRect(0, by, e.w, e.h-by, color.NRGBA{R: 24, G: 24, B: 24, A: 255})
 	f := e.cv.Font(fontBody)
 	e.cv.Font(fontBody).DrawText(e.cv.Image(), margin, by+16, truncate(p.Name, 46), colText)
 	y := by + 56
@@ -398,7 +398,7 @@ func (e *Engine) renderGallery() {
 			continue
 		}
 		y := y0 + idx*rowHeight
-		e.cv.FillRect(margin, y, e.w-2*margin, rowHeight-10, color.NRGBA{255, 255, 255, 26})
+		e.cv.FillRect(margin, y, e.w-2*margin, rowHeight-10, color.NRGBA{R: 255, G: 255, B: 255, A: 26})
 		e.cv.Font(fontBody).DrawText(e.cv.Image(), margin+16, y+(rowHeight-10)/2-14, r.label, colText)
 		e.buttons = append(e.buttons, hitButton{label: r.arg, rect: [4]int{margin, y, e.w - margin, y + rowHeight - 10}, kind: r.kind})
 	}
@@ -435,7 +435,7 @@ func (e *Engine) renderAlbum() {
 		if thumb != nil {
 			copyBand(e.cv.Image(), thumb, x, y, cellW, cellH)
 		} else {
-			e.cv.FillRect(x, y, cellW, cellH, color.NRGBA{40, 40, 40, 255})
+			e.cv.FillRect(x, y, cellW, cellH, color.NRGBA{R: 40, G: 40, B: 40, A: 255})
 			e.cv.Font(fontBody).DrawText(e.cv.Image(), x+12, y+12, "no image", colDim)
 		}
 		// Priority / favourite markers.
@@ -473,7 +473,7 @@ func (e *Engine) renderSearch() {
 			continue
 		}
 		y := y0 + idx*rowHeight
-		e.cv.FillRect(margin, y, e.w-2*margin-letterIndexW, rowHeight-10, color.NRGBA{255, 255, 255, 26})
+		e.cv.FillRect(margin, y, e.w-2*margin-letterIndexW, rowHeight-10, color.NRGBA{R: 255, G: 255, B: 255, A: 26})
 		label := truncate(p.Name, 44)
 		if e.sortByName {
 			if p.CaptureDate.IsZero() {
@@ -499,7 +499,7 @@ func (e *Engine) renderSearch() {
 		if rune(letters[i]) == e.filterChar {
 			col = colAccent
 		}
-		e.cv.FillRect(e.w-letterIndexW, y, letterIndexW, lh, color.NRGBA{0, 0, 0, 120})
+		e.cv.FillRect(e.w-letterIndexW, y, letterIndexW, lh, color.NRGBA{R: 0, G: 0, B: 0, A: 120})
 		f := e.cv.Font(fontBody)
 		f.DrawText(e.cv.Image(), e.w-letterIndexW/2-7, y+(lh-f.CellH())/2, string(letters[i]), col)
 	}
@@ -604,14 +604,14 @@ func (e *Engine) renderSettings() {
 			e.infoRow(y, rowW, it.name, it.value)
 			y += it.h
 		case setDivider:
-			e.cv.FillRect(margin, y+8, rowW, 8, color.NRGBA{255, 255, 255, 60})
+			e.cv.FillRect(margin, y+8, rowW, 8, color.NRGBA{R: 255, G: 255, B: 255, A: 60})
 			y += it.h
 		case setGap:
 			y += it.h
 		case setApply:
 			bw := 320.0
 			bx := (e.w - int(bw)) / 2
-			e.cv.FillRect(bx, y, int(bw), it.h, color.NRGBA{255, 196, 0, 46})
+			e.cv.FillRect(bx, y, int(bw), it.h, color.NRGBA{R: 255, G: 196, B: 0, A: 46})
 			f := e.cv.Font(fontBody)
 			f.DrawText(e.cv.Image(), bx+(int(bw)-f.Width(it.name))/2, y+(it.h-f.CellH())/2, it.name, colAccent)
 			e.buttons = append(e.buttons, hitButton{label: it.name, rect: [4]int{bx, y, bx + int(bw), y + it.h}, kind: btnApply})
@@ -623,7 +623,7 @@ func (e *Engine) renderSettings() {
 // settingRow draws a tappable setting row and registers its hit area
 // (tap cycles/toggles; for brightness, tap left/right half adjusts).
 func (e *Engine) settingRow(y, w int, name, value string) int {
-	e.cv.FillRect(margin, y, w, rowHeight-16, color.NRGBA{255, 255, 255, 26})
+	e.cv.FillRect(margin, y, w, rowHeight-16, color.NRGBA{R: 255, G: 255, B: 255, A: 26})
 	e.cv.Font(fontBody).DrawText(e.cv.Image(), margin+16, y+(rowHeight-16)/2-14, name, colText)
 	vf := e.cv.Font(fontBody)
 	vw := vf.Width(value)
@@ -797,7 +797,7 @@ func (e *Engine) renderWifiList() {
 	y := margin*2 + 56
 	for i := e.wifiTop; i < len(e.wifiNets) && (i-e.wifiTop) < visible; i++ {
 		n := e.wifiNets[i]
-		e.cv.FillRect(margin, y, rowW, rowHeight-16, color.NRGBA{255, 255, 255, 26})
+		e.cv.FillRect(margin, y, rowW, rowHeight-16, color.NRGBA{R: 255, G: 255, B: 255, A: 26})
 		right := fmt.Sprintf("%d%%", n.Signal)
 		if !n.Encrypted {
 			right = right + "  (open)"
@@ -811,7 +811,7 @@ func (e *Engine) renderWifiList() {
 	}
 	// The hidden-network row scrolls with the list, like a network.
 	if e.wifiTop == maxTop {
-		e.cv.FillRect(margin, y, rowW, rowHeight-16, color.NRGBA{255, 255, 255, 26})
+		e.cv.FillRect(margin, y, rowW, rowHeight-16, color.NRGBA{R: 255, G: 255, B: 255, A: 26})
 		e.cv.Font(fontBody).DrawText(e.cv.Image(), margin+16, y+(rowHeight-16)/2-14, "Hidden network…", colText)
 		e.buttons = append(e.buttons, hitButton{label: "hidden", rect: [4]int{margin, y, margin + rowW, y + rowHeight - 16}, kind: btnWifiHidden})
 	}
@@ -829,7 +829,7 @@ func (e *Engine) renderWifiText() {
 	y := margin*2 + 40
 	// Input field.
 	fieldH := 64
-	e.cv.FillRect(margin, y, rowW, fieldH, color.NRGBA{255, 255, 255, 14})
+	e.cv.FillRect(margin, y, rowW, fieldH, color.NRGBA{R: 255, G: 255, B: 255, A: 14})
 	f := e.cv.Font(fontBody)
 	shown := e.wifiText
 	if e.wifiPsk && !e.wifiShow {
@@ -854,7 +854,7 @@ func (e *Engine) renderWifiText() {
 				shown = strings.ToUpper(shown)
 			}
 			x := margin + i*(cellW+gap)
-			e.cv.FillRect(x, y, cellW, rowH, color.NRGBA{255, 255, 255, 26})
+			e.cv.FillRect(x, y, cellW, rowH, color.NRGBA{R: 255, G: 255, B: 255, A: 26})
 			e.cv.Font(fontBody).DrawText(e.cv.Image(), x+(cellW-f.Width(shown))/2, y+(rowH-f.CellH())/2, shown, colText)
 			e.buttons = append(e.buttons, hitButton{label: string(ch), rect: [4]int{x, y, x + cellW, y + rowH}, kind: btnKey})
 		}
@@ -877,7 +877,7 @@ func (e *Engine) renderWifiText() {
 		x := margin + i*(cellW2+gap)
 		if (a.kind == btnKeyShow) && !e.wifiPsk {
 			// No Show/Hide on the SSID entry: inert cell.
-			e.cv.FillRect(x, y, cellW2, rowH, color.NRGBA{255, 255, 255, 12})
+			e.cv.FillRect(x, y, cellW2, rowH, color.NRGBA{R: 255, G: 255, B: 255, A: 12})
 			continue
 		}
 		if a.kind == btnKeyShift {
@@ -886,10 +886,10 @@ func (e *Engine) renderWifiText() {
 				a.text = "Unshift"
 			}
 		}
-		bg := color.NRGBA{255, 255, 255, 26}
+		bg := color.NRGBA{R: 255, G: 255, B: 255, A: 26}
 		col := colText
 		if a.kind == btnKeyDone {
-			bg, col = color.NRGBA{255, 196, 0, 46}, colAccent
+			bg, col = color.NRGBA{R: 255, G: 196, B: 0, A: 46}, colAccent
 		}
 		e.cv.FillRect(x, y, cellW2, rowH, bg)
 		e.cv.Font(fontBody).DrawText(e.cv.Image(), x+(cellW2-f.Width(a.text))/2, y+(rowH-f.CellH())/2, a.text, col)
