@@ -631,13 +631,33 @@ func TestDownloadResumeWithRange(t *testing.T) {
 }
 
 func TestPolicyWindow(t *testing.T) {
-	// inWindow: a full-day UTC window always contains now.
-	if !inWindow(config.Window{Start: "00:00", End: "23:59", TZ: "UTC"}) {
-		t.Error("full-day window should contain now")
+	// inWindow is checked at fixed instants (the CI run that exposed
+	// the old wall-clock flake failed at 23:59 UTC: the end minute was
+	// exclusive, so "00:00"-"23:59" was NOT the full day).
+	full := config.Window{Start: "00:00", End: "23:59", TZ: "UTC"}
+	for _, hhmm := range []string{"00:00:00", "12:34:56", "23:59:59"} {
+		at, _ := time.Parse("2006-01-02T15:04:05Z", "2026-01-01T"+hhmm)
+		if !inWindow(full, at) {
+			t.Errorf("full-day window should contain %s", hhmm)
+		}
 	}
-	// A zero-length window never does.
-	if inWindow(config.Window{Start: "12:00", End: "12:00", TZ: "UTC"}) {
-		t.Error("zero-length window should not contain now")
+	// The end minute is included; the minute after it is not.
+	one := config.Window{Start: "12:00", End: "12:00", TZ: "UTC"}
+	in, _ := time.Parse("2006-01-02T15:04:05Z", "2026-01-01T12:00:59Z")
+	out, _ := time.Parse("2006-01-02T15:04:05Z", "2026-01-01T12:01:00Z")
+	if !inWindow(one, in) || inWindow(one, out) {
+		t.Error("12:00-12:00 should be exactly the 12:00 minute")
+	}
+	// A window crossing midnight includes both ends of the range.
+	mid := config.Window{Start: "22:00", End: "02:00", TZ: "UTC"}
+	for _, hhmm := range []string{"22:00:00", "23:30:00", "00:15:00", "02:00:59"} {
+		at, _ := time.Parse("2006-01-02T15:04:05Z", "2026-01-01T"+hhmm)
+		if !inWindow(mid, at) {
+			t.Errorf("cross-midnight window should contain %s", hhmm)
+		}
+	}
+	if inWindow(mid, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)) {
+		t.Error("cross-midnight window should not contain noon")
 	}
 
 	// policyAllowsNow: immediate always; hybrid with an empty pending

@@ -1208,13 +1208,14 @@ func cacheKeyForPath(p string) string {
 //   - hybrid: inside the window, or always when the pending batch is
 //     small (<= HybridMaxBytes) — small changes need not wait.
 func (e *Engine) policyAllowsNow() bool {
+	now := time.Now()
 	switch e.syncCfg.Policy {
 	case "", "immediate":
 		return true
 	case "scheduled":
-		return inWindow(e.syncCfg.DownloadWindow)
+		return inWindow(e.syncCfg.DownloadWindow, now)
 	case "hybrid":
-		if inWindow(e.syncCfg.DownloadWindow) {
+		if inWindow(e.syncCfg.DownloadWindow, now) {
 			return true
 		}
 		total, _ := e.pendingBytes(context.Background())
@@ -1240,19 +1241,25 @@ func (e *Engine) pendingBytes(ctx context.Context) (int64, error) {
 }
 
 // inWindow reports whether now is inside the daily window (fixed IANA
-// zone). A window crossing midnight is supported (start > end).
-func inWindow(w config.Window) bool {
+// zone). Boundaries are at minute granularity and the END minute is
+// INCLUDED: "00:00"-"23:59" is the full day (HH:MM has no 24:00, so an
+// exclusive end would make a full-day window unexpressible and would
+// silently drop the last minute). A window crossing midnight is
+// supported (start > end); start == end is a one-minute window.
+//
+// now is injected so the logic is testable at any minute of the day.
+func inWindow(w config.Window, now time.Time) bool {
 	loc, err := time.LoadLocation(w.TZ)
 	if err != nil {
 		loc = time.UTC
 	}
-	now := time.Now().In(loc)
+	now = now.In(loc)
 	s, e := parseHM(w.Start), parseHM(w.End)
 	cur := now.Hour()*60 + now.Minute()
 	if s > e { // crosses midnight
-		return cur >= s || cur < e
+		return cur >= s || cur <= e
 	}
-	return cur >= s && cur < e
+	return cur >= s && cur <= e
 }
 
 func parseHM(s string) int {
