@@ -240,7 +240,12 @@ async function request<T>(method: Method, path: string, body?: unknown): Promise
 
 // --- Auth ---------------------------------------------------------------
 
-export async function login(email: string, password: string): Promise<void> {
+// LoginResult: 'ok' means a session was created; 'mfa' means the
+// account has 2FA enabled and the client must complete the code step
+// with mfaVerify (the mfa id is single-use and expires in 5 minutes).
+export type LoginResult = { state: 'ok' } | { state: 'mfa'; mfaId: string };
+
+export async function login(email: string, password: string): Promise<LoginResult> {
   const res = await fetch('/api/v1/auth/login', {
     method: 'POST',
     credentials: 'same-origin',
@@ -259,8 +264,68 @@ export async function login(email: string, password: string): Promise<void> {
   if (!res.ok) {
     throw new ApiError(res.status, data?.error ?? 'login_failed', data?.message ?? 'login failed');
   }
+  if (data?.mfa_required) {
+    return { state: 'mfa', mfaId: data.mfa_id };
+  }
   session.user = data.user;
   session.csrf = data.csrf_token;
+  return { state: 'ok' };
+}
+
+// mfaVerify completes the second factor of a login and installs the
+// session (same response shape as a plain login).
+export async function mfaVerify(mfaId: string, code: string): Promise<void> {
+  const res = await fetch('/api/v1/auth/mfa', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mfa_id: mfaId, code }),
+  });
+  const text = await res.text();
+  let data: any = null;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      /* ignore */
+    }
+  }
+  if (!res.ok) {
+    throw new ApiError(res.status, data?.error ?? 'mfa_failed', data?.message ?? 'two-factor check failed');
+  }
+  session.user = data.user;
+  session.csrf = data.csrf_token;
+}
+
+// --- Two-factor (TOTP) -------------------------------------------------------
+
+export interface TotpStatus {
+  enabled: boolean;
+  provisional: boolean;
+  recovery_remaining: number;
+}
+
+export interface TotpEnable {
+  secret: string;
+  otpauth_url: string;
+  qr_png?: string;
+  recovery_codes: string[];
+}
+
+export function totpStatus(): Promise<TotpStatus> {
+  return request('GET', '/api/v1/users/me/totp');
+}
+
+export function totpEnable(password: string): Promise<TotpEnable> {
+  return request('POST', '/api/v1/users/me/totp/enable', { password });
+}
+
+export function totpConfirm(code: string): Promise<{ status: string }> {
+  return request('POST', '/api/v1/users/me/totp/confirm', { code });
+}
+
+export function totpDisable(password: string): Promise<{ status: string }> {
+  return request('POST', '/api/v1/users/me/totp/disable', { password });
 }
 
 export async function logout(): Promise<void> {

@@ -136,8 +136,35 @@ WantedBy=multi-user.target
 server:
   listen: 127.0.0.1:8080
   public_base_url: https://openframe.example.com
+  # First-run administrator account + notification recipient.
+  admin_email: admin@example.com
+  # Outbound mail (ADR-0015). Best-effort: a dead mail server never
+  # blocks startup or a request; first-run credentials fall back to
+  # the journal log entry when a send fails. Verify with
+  # `openframe email test`; `doctor` reports the state (read-only).
+  email:
+    enabled: true
+    host: smtp.example.com
+    port: 587            # 587 (STARTTLS) | 465 (implicit TLS) | 25
+    username: openframe@example.com
+    # Prefer the env var over the file in shared deployments:
+    #   Environment=OPENFRAME_SERVER_EMAIL_PASSWORD=...
+    from: "OpenFrame <openframe@example.com>"
 data_dir: /var/lib/openframe
 ```
+
+### First-run and two-factor
+
+- **First run:** with mail enabled, the one-time temporary admin
+  password is emailed to `server.admin_email` and **not logged**; the
+  journal entry remains the documented fallback when the send fails.
+- **Two-factor (opt-in, ADR-0015):** Account → Settings → Security in
+  the admin UI. Enabling is two-step (scan QR, then confirm with a
+  live code) and issues 10 single-use recovery codes — shown once on
+  screen and emailed. 2FA is per-user and has no admin override by
+  design: it protects against a compromised admin. After a server
+  rebuild from backup (T-06), re-provision 2FA on every enrolled
+  account, not just passwords.
 
 ## 2. Backups (T-06 / T-10)
 

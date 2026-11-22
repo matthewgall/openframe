@@ -1,5 +1,5 @@
 import './style.css';
-import { ApiError, changePassword, currentUser, login, logout, refreshMe, updateProfile } from './api';
+import { ApiError, changePassword, currentUser, login, logout, mfaVerify, refreshMe, totpConfirm, totpDisable, totpEnable, totpStatus, updateProfile } from './api';
 import { h } from './components';
 import { renderAlbums, renderAlbumDetail } from './views/albums';
 import { renderAudit } from './views/audit';
@@ -60,8 +60,12 @@ function renderLogin(root: HTMLElement, onAuthed: () => void): void {
     errEl.textContent = '';
     submit.disabled = true;
     try {
-      await login(email.value.trim(), password.value);
-      onAuthed();
+      const result = await login(email.value.trim(), password.value);
+      if (result.state === 'ok') {
+        onAuthed();
+        return;
+      }
+      startMfaStep(result.mfaId);
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : 'Sign-in failed.';
       errEl.textContent = msg;
@@ -69,6 +73,47 @@ function renderLogin(root: HTMLElement, onAuthed: () => void): void {
       password.focus();
     }
   });
+
+  // 2FA step: the password was right, the account also needs a code
+  // from the authenticator (or a recovery code). Replaces the form in
+  // place — no page navigation, so the session-less flow stays simple.
+  function startMfaStep(mfaId: string): void {
+    form.replaceChildren();
+    submit.disabled = false;
+    errEl.textContent = '';
+    const code = h('input', {
+      class: 'input', type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code',
+      placeholder: '6-digit code (or a recovery code)', 'aria-label': 'Two-factor code',
+    });
+    code.id = 'login-mfa';
+    submit.textContent = 'Verify code';
+    form.append(
+      h('div', { class: 'field' },
+        h('label', { for: 'login-mfa' }, 'Two-factor code'),
+        code,
+        h('p', { class: 'muted small' }, 'Enter the 6-digit code from your authenticator app, or one of your recovery codes (ABCDE-FGHIJ).'),
+      ),
+      errEl,
+      submit,
+    );
+    form.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      errEl.textContent = '';
+      submit.disabled = true;
+      try {
+        await mfaVerify(mfaId, code.value.trim());
+        onAuthed();
+      } catch (err) {
+        const expired = err instanceof ApiError && (err.status === 401 && err.code === 'invalid_challenge');
+        errEl.textContent = expired
+          ? 'That sign-in step has expired — sign in again.'
+          : err instanceof ApiError ? err.message : 'Two-factor check failed.';
+        submit.disabled = false;
+        code.select();
+      }
+    });
+    code.focus();
+  }
 
   card.append(form);
   wrap.append(card);
@@ -87,7 +132,7 @@ function openAccountMenu(anchor: HTMLElement, onDone: () => void): void {
   const changeItem = h('button', { class: 'menu-item', type: 'button' }, 'Change password…');
   const logoutItem = h('button', { class: 'menu-item danger', type: 'button' }, 'Sign out');
 
-  settingsItem.addEventListener('click', () => {
+  settingsItem.addEventListener('click', async () => {
     menu.remove();
     const m = h('div', { class: 'modal-overlay', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Account settings' });
     const dlg = h('div', { class: 'modal' });
@@ -113,12 +158,47 @@ function openAccountMenu(anchor: HTMLElement, onDone: () => void): void {
         save.disabled = false;
       }
     });
+
+    // Security: live 2FA status + entry points. Rendered async because
+    // it comes from the server; identity fields render immediately.
+    const secWrap = h('div', { class: 'section-gap' },
+      h('h3', { class: 'settings-heading' }, 'Security'),
+      h('div', { class: 'muted small' }, 'Loading…'));
+    totpStatus()
+      .then((st) => {
+        secWrap.querySelectorAll('.muted').forEach((n) => n.remove());
+        const state = h('span', { class: st.enabled ? 'badge ok' : 'badge warn' },
+          st.enabled ? 'ON' : 'OFF');
+        const row = h('div', { class: 'setting-row' },
+          h('div', {}, h('div', {}, 'Two-factor authentication'),
+            h('div', { class: 'muted small' }, st.enabled
+              ? st.recovery_remaining + ' recovery code' + (st.recovery_remaining === 1 ? '' : 's') + ' remaining'
+              : 'Protect sign-in with an authenticator app')),
+          state);
+        const actions = h('div', { class: 'row' });
+        if (st.enabled) {
+          const disable = h('button', { class: 'btn danger', type: 'button' }, 'Disable two-factor…');
+          disable.addEventListener('click', () => { m.remove(); openTotpDisable(onDone); });
+          actions.append(disable);
+        } else {
+          const enable = h('button', { class: 'btn primary', type: 'button' }, 'Enable two-factor…');
+          enable.addEventListener('click', () => { m.remove(); openTotpEnable(onDone); });
+          actions.append(enable);
+        }
+        secWrap.append(row, actions);
+      })
+      .catch((e) => {
+        secWrap.querySelectorAll('.muted').forEach((n) => n.remove());
+        secWrap.append(h('div', { class: 'login-error' }, e instanceof ApiError ? e.message : String(e)));
+      });
+
     body.append(
       h('div', { class: 'field' }, h('label', {}, 'Display name'), name),
       h('div', { class: 'field' }, h('label', {}, 'Email'), email),
       h('p', { class: 'muted' }, 'Other members will see your new name everywhere it appears.'),
       errEl,
       h('div', { class: 'modal-actions' }, save),
+      secWrap,
     );
     dlg.append(h('div', { class: 'modal-head' }, h('h2', {}, 'Account settings')), body);
     m.append(dlg);
@@ -177,6 +257,120 @@ function openAccountMenu(anchor: HTMLElement, onDone: () => void): void {
     }
   };
   setTimeout(() => document.addEventListener('click', away), 0);
+}
+
+// --- Two-factor setup ---------------------------------------------------------
+
+// openTotpEnable walks the enablement: password -> QR + secret +
+// recovery codes (shown once) -> confirm with a live code. The QR is a
+// data-URL image (server-rendered PNG); the secret text is there for
+// manual entry on phones without a camera.
+function openTotpEnable(onDone: () => void): void {
+  const m = h('div', { class: 'modal-overlay', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Enable two-factor' });
+  const dlg = h('div', { class: 'modal wide' });
+  const body = h('div', { class: 'modal-body' });
+  const errEl = h('div', { class: 'login-error', role: 'alert' });
+
+  // Step 1: password gate.
+  const pass = h('input', { class: 'input', type: 'password', placeholder: 'Your password', autocomplete: 'current-password' });
+  const startBtn = h('button', { class: 'btn primary', type: 'button' }, 'Continue');
+  const step1 = h('div', {},
+    h('div', { class: 'field' },
+      h('label', {}, 'Password'),
+      h('p', { class: 'muted small' }, 'Two-factor issues recovery codes that can sign in without your authenticator, so enabling it is password-gated.'),
+      pass),
+    errEl,
+    h('div', { class: 'modal-actions' }, startBtn));
+
+  startBtn.addEventListener('click', async () => {
+    errEl.textContent = '';
+    startBtn.disabled = true;
+    try {
+      const en = await totpEnable(pass.value);
+      body.replaceChildren();
+      // Step 2: scan + confirm.
+      const qr = en.qr_png ? h('img', { class: 'qr', src: 'data:image/png;base64,' + en.qr_png, alt: 'QR code for your authenticator app' }) : null;
+      const secret = h('code', { class: 'secret-line' }, en.secret);
+      const codes = h('div', { class: 'recovery-codes' }, ...en.recovery_codes.map((c) => h('code', {}, c)));
+      const code = h('input', { class: 'input', type: 'text', inputmode: 'numeric', placeholder: '6-digit code', 'aria-label': 'Confirmation code' });
+      const confirmBtn = h('button', { class: 'btn primary', type: 'button' }, 'Confirm and enable');
+      const copy = h('button', { class: 'btn ghost small-btn', type: 'button' }, 'Copy recovery codes');
+      copy.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(en.recovery_codes.join('\n'));
+          copy.textContent = 'Copied';
+          setTimeout(() => { copy.textContent = 'Copy recovery codes'; }, 2000);
+        } catch { /* clipboard unavailable: the list is visible */ }
+      });
+      const step2 = h('div', {},
+        h('p', {}, 'Scan the QR code with your authenticator app (Google Authenticator, 1Password, ...), or enter the secret manually:'),
+        h('div', { class: 'qr-row' }, qr ?? h('span', { class: 'muted' }, 'QR unavailable — enter the secret manually:'), secret),
+        h('p', { class: 'warning', role: 'alert' }, 'Your recovery codes are shown only once (and emailed if the server is configured with mail). Store them somewhere safe — they are your only way in if you lose your authenticator.'),
+        codes,
+        h('div', { class: 'row' }, copy),
+        errEl,
+        h('div', { class: 'field' }, h('label', {}, 'Now enter the 6-digit code from your app'), code),
+        h('div', { class: 'modal-actions' }, confirmBtn));
+      body.append(step2);
+      confirmBtn.addEventListener('click', async () => {
+        errEl.textContent = '';
+        confirmBtn.disabled = true;
+        try {
+          await totpConfirm(code.value.trim());
+          m.remove();
+          onDone();
+        } catch (e) {
+          errEl.textContent = e instanceof ApiError ? e.message : 'Could not confirm two-factor.';
+          confirmBtn.disabled = false;
+        }
+      });
+      code.focus();
+    } catch (e) {
+      errEl.textContent = e instanceof ApiError ? e.message : String(e);
+      startBtn.disabled = false;
+    }
+  });
+
+  body.append(step1);
+  dlg.append(h('div', { class: 'modal-head' }, h('h2', {}, 'Enable two-factor')), body);
+  m.append(dlg);
+  document.body.append(m);
+  pass.focus();
+}
+
+// openTotpDisable: ADR-0013 in the UI — disabling 2FA undoes a
+// protection whose recovery (re-enabling) depends on the same person,
+// so it confirms the consequence AND re-verifies the password.
+function openTotpDisable(onDone: () => void): void {
+  const m = h('div', { class: 'modal-overlay', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Disable two-factor' });
+  const dlg = h('div', { class: 'modal' });
+  const body = h('div', { class: 'modal-body' });
+  const errEl = h('div', { class: 'login-error', role: 'alert' });
+  const pass = h('input', { class: 'input', type: 'password', placeholder: 'Your password', autocomplete: 'current-password' });
+  const go = h('button', { class: 'btn danger', type: 'button' }, 'Disable two-factor');
+  const cancel = h('button', { class: 'btn ghost', type: 'button' }, 'Cancel');
+  go.addEventListener('click', async () => {
+    errEl.textContent = '';
+    go.disabled = true;
+    try {
+      await totpDisable(pass.value);
+      m.remove();
+      onDone();
+    } catch (e) {
+      errEl.textContent = e instanceof ApiError ? e.message : String(e);
+      go.disabled = false;
+    }
+  });
+  body.append(
+    h('p', { class: 'warning', role: 'alert' }, 'Sign-in will no longer ask for your authenticator code. Anyone with your password can sign in until you enable two-factor again.'),
+    h('div', { class: 'field' }, h('label', {}, 'Password'), pass),
+    errEl,
+    h('div', { class: 'modal-actions' }, cancel, go),
+  );
+  dlg.append(h('div', { class: 'modal-head' }, h('h2', {}, 'Disable two-factor?')), body);
+  m.append(dlg);
+  document.body.append(m);
+  pass.focus();
 }
 
 // --- Shell -------------------------------------------------------------------
