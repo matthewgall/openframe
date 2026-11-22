@@ -26,8 +26,8 @@ const (
 	reqModeGetEncoder     = 0xc01464a6 // IOWR ('d', 0xa6, 20)
 	reqModeGetConnector   = 0xc05064a7 // IOWR ('d', 0xa7, 80)
 	reqModeGetProperty    = 0xc04064aa // IOWR ('d', 0xaa, 64)
-	reqModeGetPropBlob    = 0xc01064ac // IOWR ('d', 0xac, 16)
 	reqModeRMFB           = 0xc00464af // IOWR ('d', 0xaf, 4)
+	reqModeObjGetProps    = 0xc02064b9 // IOWR ('d', 0xb9, 32)
 	reqModeCreateDumb     = 0xc02064b2 // IOWR ('d', 0xb2, 32)
 	reqModeMapDumb        = 0xc01064b3 // IOWR ('d', 0xb3, 16)
 	reqModeDestroyDumb    = 0xc00464b4 // IOWR ('d', 0xb4, 4)
@@ -177,6 +177,17 @@ type getPlane struct {
 	formatTypePtr    uint64
 }
 
+// struct drm_mode_obj_get_properties (32 bytes). Returns the global
+// property IDs owned by one object (crtc/plane/connector). The same
+// total-count/truncated-write semantics as the other list ioctls apply.
+type objGetProps struct {
+	propsPtr      uint64
+	propValuesPtr uint64
+	countProps    uint32
+	objID         uint32
+	objType       uint32
+}
+
 // struct drm_mode_get_property (64 bytes)
 type getProperty struct {
 	valuesPtr      uint64
@@ -248,8 +259,8 @@ type destroyDumb struct {
 }
 
 // ioctl issues a single DRM ioctl.
-func ioctl(fd int, req uint, p unsafe.Pointer) error {
-	_, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), uintptr(req), uintptr(p))
+func ioctl(fd uintptr, req uint, p unsafe.Pointer) error {
+	_, _, errno := unix.Syscall(unix.SYS_IOCTL, fd, uintptr(req), uintptr(p))
 	if errno != 0 {
 		return errno
 	}

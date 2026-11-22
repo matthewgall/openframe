@@ -22,9 +22,12 @@ import (
 // created per present and swapped in atomically; the previous one is
 // released after the commit lands. No X, no Wayland, no compositor.
 type Driver struct {
-	log    *slog.Logger
-	card   string
-	fd     int
+	log  *slog.Logger
+	card string
+	// file is held (not just its Fd()) so the GC finalizer cannot close
+	// the descriptor out from under in-flight ioctls — that produced
+	// "bad file descriptor" mid-Init once probe() had succeeded.
+	file   *os.File
 	width  int
 	height int
 
@@ -35,8 +38,16 @@ type Driver struct {
 	crtcID   uint32
 	connID   uint32
 
-	// property id map (global ids, keyed by name)
-	props map[string]uint32
+	// global property table: id -> name. The same name can exist as
+	// several distinct global properties (vc4 registers one
+	// "rotation"/"alpha"/... property per plane), so per-object maps
+	// below are the only safe way to address an object's properties.
+	propNames map[uint32]string
+	// per-object property maps: name -> global id, for the objects
+	// this driver commits.
+	connProps  map[string]uint32
+	crtcProps  map[string]uint32
+	planeProps map[string]uint32
 
 	// dumb buffer state
 	dumbHandle uint32
@@ -62,17 +73,17 @@ func New(log *slog.Logger, card string, width, height int) (*Driver, error) {
 	d := &Driver{
 		log:    log,
 		card:   card,
-		fd:     int(fd.Fd()),
+		file:   fd,
 		width:  width,
 		height: height,
 		power:  true,
 	}
 	if err := d.enableAtomic(); err != nil {
-		fd.Close()
+		d.file.Close()
 		return nil, fmt.Errorf("enable atomic: %w", err)
 	}
 	if err := d.probe(); err != nil {
-		fd.Close()
+		d.file.Close()
 		return nil, err
 	}
 	return d, nil
@@ -84,7 +95,7 @@ func New(log *slog.Logger, card string, width, height int) (*Driver, error) {
 func (d *Driver) enableAtomic() error {
 	for _, v := range []uint64{2, 1} {
 		arg := setClientCap{capability: clientCapAtomic, value: v}
-		err := ioctl(d.fd, reqSetClientCap, unsafe.Pointer(&arg))
+		err := ioctl(d.file.Fd(), reqSetClientCap, unsafe.Pointer(&arg))
 		if err == nil {
 			return nil
 		}
@@ -189,21 +200,108 @@ func (d *Driver) probe() error {
 		return fmt.Errorf("no planes on %s", d.card)
 	}
 
-	// Property names (global ids).
-	d.props = make(map[string]uint32)
-	for i := 0; i < 512; i++ {
+	// Global property table (id -> name). Property ids are allocated
+	// from a per-device pool starting at 1 (id 0 is invalid) and are
+	// not gap-free (vc4 on 6.18: 548 props spread over 1..669, with
+	// per-object blocks leaving holes), so scan the range skipping
+	// misses and stop after a long run of consecutive misses.
+	d.propNames = make(map[uint32]string)
+	misses := 0
+	for i := 1; i <= 4096 && misses < 128; i++ {
 		p, err := d.getProperty(uint32(i))
 		if err != nil {
-			break // ids are dense from 0
+			misses++
+			continue
 		}
-		d.props[nameOf(p.name)] = p.propID
+		misses = 0
+		d.propNames[p.propID] = nameOf(p.name)
 	}
-	for _, want := range []string{"CRTC_ID", "MODE_ID", "ACTIVE", "FB_ID", "CRTC_W", "CRTC_H", "SRC_W", "SRC_H"} {
-		if _, ok := d.props[want]; !ok {
-			return fmt.Errorf("required DRM property %q not found on %s", want, d.card)
+
+	// Per-object property resolution. An atomic commit may only set
+	// properties the object actually owns, and a duplicated name
+	// (e.g. vc4's per-plane "rotation") belongs to a specific object;
+	// resolving against the object's own list is the only correct way.
+	if d.connProps, err = d.objectProps(d.connID, objConnector); err != nil {
+		return fmt.Errorf("connector %d properties: %w", d.connID, err)
+	}
+	if d.crtcProps, err = d.objectProps(d.crtcID, objCrtc); err != nil {
+		return fmt.Errorf("crtc %d properties: %w", d.crtcID, err)
+	}
+	if d.planeProps, err = d.objectProps(d.planeID, objPlane); err != nil {
+		return fmt.Errorf("plane %d properties: %w", d.planeID, err)
+	}
+	for _, want := range []string{"MODE_ID", "ACTIVE"} {
+		if _, ok := d.crtcProps[want]; !ok {
+			return fmt.Errorf("required DRM property %q not found on CRTC %d", want, d.crtcID)
 		}
+	}
+	for _, want := range []string{"FB_ID", "CRTC_ID", "CRTC_W", "CRTC_H", "SRC_W", "SRC_H"} {
+		if _, ok := d.planeProps[want]; !ok {
+			return fmt.Errorf("required DRM property %q not found on plane %d", want, d.planeID)
+		}
+	}
+	if _, ok := d.connProps["CRTC_ID"]; !ok {
+		return fmt.Errorf("required DRM property CRTC_ID not found on connector %d", d.connID)
 	}
 	return nil
+}
+
+// objectProps returns the object's own properties as name -> global
+// property id, using the global id -> name table built in probe.
+func (d *Driver) objectProps(objID, objType uint32) (map[string]uint32, error) {
+	ids, err := d.objectPropIDs(objID, objType)
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[string]uint32, len(ids))
+	for _, id := range ids {
+		if name, ok := d.propNames[id]; ok {
+			m[name] = id
+		}
+	}
+	return m, nil
+}
+
+// objectPropIDs lists the global property ids owned by an object.
+// OBJ_GETPROPERTIES follows the same total-count/truncated-write
+// protocol as the other list ioctls, and it fills BOTH the id and the
+// value arrays (current values), so both buffers must be valid.
+func (d *Driver) objectPropIDs(objID, objType uint32) ([]uint32, error) {
+	probeIDs := make([]uint32, 1)
+	probeVals := make([]uint64, 1)
+	var arg objGetProps
+	arg.propsPtr = u64Ptr(probeIDs)
+	arg.propValuesPtr = u64Ptr(probeVals)
+	arg.countProps = 1
+	arg.objID = objID
+	arg.objType = objType
+	if err := ioctl(d.file.Fd(), reqModeObjGetProps, unsafe.Pointer(&arg)); err != nil {
+		return nil, err
+	}
+	total := int(arg.countProps)
+	if total == 0 {
+		return nil, nil
+	}
+	if total > 4096 {
+		return nil, fmt.Errorf("drm: implausible property count %d for object %d", total, objID)
+	}
+	ids := make([]uint32, total)
+	vals := make([]uint64, total)
+	arg = objGetProps{
+		propsPtr:      u64Ptr(ids),
+		propValuesPtr: u64Ptr(vals),
+		countProps:    uint32(total),
+		objID:         objID,
+		objType:       objType,
+	}
+	if err := ioctl(d.file.Fd(), reqModeObjGetProps, unsafe.Pointer(&arg)); err != nil {
+		return nil, err
+	}
+	n := int(arg.countProps)
+	if n > total {
+		return nil, fmt.Errorf("drm: property count grew to %d during probe", n)
+	}
+	return ids[:n], nil
 }
 
 // --- raw ioctl wrappers ------------------------------------------------
@@ -227,8 +325,13 @@ func (d *Driver) getResources() (resourceIDs, error) {
 		countEncoders:   uint32(len(enc)),
 		countCrtcs:      uint32(len(crtc)),
 	}
-	if err := ioctl(d.fd, reqModeGetResources, unsafe.Pointer(&arg)); err != nil {
+	if err := ioctl(d.file.Fd(), reqModeGetResources, unsafe.Pointer(&arg)); err != nil {
 		return out, err
+	}
+	// The kernel reports TOTAL counts but writes only what fits the
+	// buffers; never slice with a raw kernel-reported count.
+	if int(arg.countConnectors) > len(conn) || int(arg.countEncoders) > len(enc) || int(arg.countCrtcs) > len(crtc) {
+		return out, fmt.Errorf("drm: resource counts (%d connectors, %d encoders, %d crtcs) exceed buffers", arg.countConnectors, arg.countEncoders, arg.countCrtcs)
 	}
 	out.connectors = conn[:arg.countConnectors]
 	out.encoders = enc[:arg.countEncoders]
@@ -258,8 +361,13 @@ func (d *Driver) getConnector(id uint32) (connectorInfo, error) {
 		countEncoders: uint32(len(encs)),
 		countProps:    uint32(len(props)),
 	}
-	if err := ioctl(d.fd, reqModeGetConnector, unsafe.Pointer(&arg)); err != nil {
+	if err := ioctl(d.file.Fd(), reqModeGetConnector, unsafe.Pointer(&arg)); err != nil {
 		return out, err
+	}
+	// The kernel reports TOTAL counts but writes only what fits the
+	// buffers; never slice with a raw kernel-reported count.
+	if int(arg.countModes) > len(modes) || int(arg.countEncoders) > len(encs) {
+		return out, fmt.Errorf("drm: connector %d reports %d modes / %d encoders, exceeding buffers", id, arg.countModes, arg.countEncoders)
 	}
 	out.connection = arg.connection
 	out.modes = modes[:arg.countModes]
@@ -270,32 +378,67 @@ func (d *Driver) getConnector(id uint32) (connectorInfo, error) {
 func (d *Driver) getEncoder(id uint32) (getEncoder, error) {
 	var arg getEncoder
 	arg.encoderID = id
-	err := ioctl(d.fd, reqModeGetEncoder, unsafe.Pointer(&arg))
+	err := ioctl(d.file.Fd(), reqModeGetEncoder, unsafe.Pointer(&arg))
 	return arg, err
 }
 
+// maxPlaneIDs sanity-bounds the plane count reported by the kernel before
+// we allocate for it. Real hardware tops out far below this (56 on the
+// vc4 panel with universal planes enabled).
+const maxPlaneIDs = 1024
+
+// getPlaneIDs returns the IDs of every plane the kernel advertises to this
+// client. The kernel follows a documented two-pass protocol (see
+// drm_mode_getplane_res in the kernel: "This ioctl is called twice, once to
+// determine how much space is needed, and the 2nd time to fill it"): it
+// always reports the TOTAL plane count in countPlanes, but writes only as
+// many IDs as fit in the caller's buffer. A single call with a small fixed
+// buffer therefore panics in ids[:countPlanes] on cards that advertise more
+// planes than the buffer (e.g. 56 on vc4 with universal planes).
 func (d *Driver) getPlaneIDs() ([]uint32, error) {
-	ids := make([]uint32, 32)
+	// Pass 1: one-slot buffer. The kernel writes at most one ID into it
+	// (guarded by count < countPlanes) and returns the total.
+	probe := make([]uint32, 1)
 	var arg getPlaneRes
-	arg.planeIDPtr = u64Ptr(ids)
-	arg.countPlanes = uint32(len(ids))
-	if err := ioctl(d.fd, reqModeGetPlaneRes, unsafe.Pointer(&arg)); err != nil {
+	arg.planeIDPtr = u64Ptr(probe)
+	arg.countPlanes = 1
+	if err := ioctl(d.file.Fd(), reqModeGetPlaneRes, unsafe.Pointer(&arg)); err != nil {
 		return nil, err
 	}
-	return ids[:arg.countPlanes], nil
+	total := int(arg.countPlanes)
+	if total == 0 {
+		return nil, nil
+	}
+	if total > maxPlaneIDs {
+		return nil, fmt.Errorf("drm: implausible plane count %d on %s", total, d.card)
+	}
+	// Pass 2: exact-size buffer, filled by the kernel.
+	ids := make([]uint32, total)
+	arg = getPlaneRes{
+		planeIDPtr:  u64Ptr(ids),
+		countPlanes: uint32(total),
+	}
+	if err := ioctl(d.file.Fd(), reqModeGetPlaneRes, unsafe.Pointer(&arg)); err != nil {
+		return nil, err
+	}
+	n := int(arg.countPlanes)
+	if n > total {
+		return nil, fmt.Errorf("drm: plane count grew to %d during probe", n)
+	}
+	return ids[:n], nil
 }
 
 func (d *Driver) getPlane(id uint32) (getPlane, error) {
 	var arg getPlane
 	arg.planeID = id
-	err := ioctl(d.fd, reqModeGetPlane, unsafe.Pointer(&arg))
+	err := ioctl(d.file.Fd(), reqModeGetPlane, unsafe.Pointer(&arg))
 	return arg, err
 }
 
 func (d *Driver) getProperty(id uint32) (getProperty, error) {
 	var arg getProperty
 	arg.propID = id
-	err := ioctl(d.fd, reqModeGetProperty, unsafe.Pointer(&arg))
+	err := ioctl(d.file.Fd(), reqModeGetProperty, unsafe.Pointer(&arg))
 	return arg, err
 }
 
@@ -389,7 +532,7 @@ func (d *Driver) Init(_ context.Context) error {
 func (d *Driver) setupDumbBuffer() error {
 	var create createDumb
 	create.width, create.height, create.bpp = uint32(d.width), uint32(d.height), 32
-	if err := ioctl(d.fd, reqModeCreateDumb, unsafe.Pointer(&create)); err != nil {
+	if err := ioctl(d.file.Fd(), reqModeCreateDumb, unsafe.Pointer(&create)); err != nil {
 		return fmt.Errorf("create dumb buffer: %w", err)
 	}
 	d.dumbHandle = create.handle
@@ -397,14 +540,16 @@ func (d *Driver) setupDumbBuffer() error {
 
 	var mapArg mapDumb
 	mapArg.handle = create.handle
-	if err := ioctl(d.fd, reqModeMapDumb, unsafe.Pointer(&mapArg)); err != nil {
+	if err := ioctl(d.file.Fd(), reqModeMapDumb, unsafe.Pointer(&mapArg)); err != nil {
 		return fmt.Errorf("map dumb buffer: %w", err)
 	}
 	mmapLen := int(create.size)
 	if mmapLen <= 0 {
 		mmapLen = int(d.dumbPitch) * d.height
 	}
-	ptr, err := syscall.Mmap(-1, int64(mapArg.offset), mmapLen, syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
+	// The dumb buffer is mapped through the DRM file descriptor (the
+	// offset from MAP_DUMB is an offset into that fd, not into fd -1).
+	ptr, err := syscall.Mmap(int(d.file.Fd()), int64(mapArg.offset), mmapLen, syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
 	if err != nil {
 		return fmt.Errorf("mmap dumb buffer: %w", err)
 	}
@@ -483,14 +628,14 @@ func (d *Driver) addFB() (uint32, error) {
 	fb.pixelFormat = formatXRGB8888
 	fb.handles[0] = d.dumbHandle
 	fb.pitches[0] = d.dumbPitch
-	if err := ioctl(d.fd, reqModeAddFB2, unsafe.Pointer(&fb)); err != nil {
+	if err := ioctl(d.file.Fd(), reqModeAddFB2, unsafe.Pointer(&fb)); err != nil {
 		return 0, fmt.Errorf("addfb2: %w", err)
 	}
 	return fb.fbID, nil
 }
 
 func (d *Driver) rmFB(id uint32) {
-	ioctl(d.fd, reqModeRMFB, unsafe.Pointer(&id)) // best effort
+	ioctl(d.file.Fd(), reqModeRMFB, unsafe.Pointer(&id)) // best effort
 }
 
 // commit performs the atomic commit: connector -> crtc, crtc mode
@@ -505,17 +650,23 @@ func (d *Driver) commit(fbID uint32) error {
 		fbID = id
 	}
 
-	prop := d.props
-	// Objects and their property counts.
-	objCRTCProps := 2 // MODE_ID, ACTIVE
-	if _, ok := prop["rotation"]; ok {
-		objCRTCProps++
-	}
-	planeProps := 8 // FB_ID, CRTC_ID, CRTC_X, CRTC_Y, CRTC_W, CRTC_H, SRC_W, SRC_H
-	connProps := 1  // CRTC_ID
+	// Properties are resolved per object: an atomic commit may only set
+	// properties the object owns, and duplicated names (vc4's per-plane
+	// "rotation"/"alpha"/...) belong to a specific object.
+	crtc := d.crtcProps
+	plane := d.planeProps
+	conn := d.connProps
 
-	counts := []uint32{uint32(connProps), uint32(objCRTCProps), uint32(planeProps)}
-	total := connProps + objCRTCProps + planeProps
+	// Objects and their property counts.
+	crtcN := 2 // MODE_ID, ACTIVE
+	if _, ok := crtc["rotation"]; ok && d.rotation != 0 {
+		crtcN++
+	}
+	planeN := 8 // FB_ID, CRTC_ID, CRTC_X, CRTC_Y, CRTC_W, CRTC_H, SRC_W, SRC_H
+	connN := 1  // CRTC_ID
+
+	counts := []uint32{uint32(connN), uint32(crtcN), uint32(planeN)}
+	total := connN + crtcN + planeN
 	props := make([]uint32, 0, total)
 	values := make([]uint64, 0, total)
 
@@ -525,29 +676,28 @@ func (d *Driver) commit(fbID uint32) error {
 	}
 
 	// Connector -> CRTC
-	addProp(prop["CRTC_ID"], uint64(d.crtcID))
+	addProp(conn["CRTC_ID"], uint64(d.crtcID))
 
-	// CRTC: mode + active (+ rotation)
-	addProp(prop["MODE_ID"], uint64(d.modeBlob))
-	addProp(prop["ACTIVE"], 1)
-	if rid, ok := prop["rotation"]; ok {
-		if bit := rotationBit(d.rotation); bit != 0 {
-			addProp(rid, bit)
-		}
+	// CRTC: mode + active (+ rotation, where the hardware exposes a
+	// CRTC rotation property; vc4 does not).
+	addProp(crtc["MODE_ID"], uint64(d.modeBlob))
+	addProp(crtc["ACTIVE"], 1)
+	if rid, ok := crtc["rotation"]; ok && d.rotation != 0 {
+		addProp(rid, rotationBit(d.rotation))
 	}
 
 	// Plane -> framebuffer, full size, no crop.
 	w, h := uint64(d.width), uint64(d.height)
-	addProp(prop["FB_ID"], uint64(fbID))
-	addProp(prop["CRTC_ID"], uint64(d.crtcID))
-	if _, ok := prop["CRTC_X"]; ok {
-		addProp(prop["CRTC_X"], 0)
-		addProp(prop["CRTC_Y"], 0)
+	addProp(plane["FB_ID"], uint64(fbID))
+	addProp(plane["CRTC_ID"], uint64(d.crtcID))
+	if _, ok := plane["CRTC_X"]; ok {
+		addProp(plane["CRTC_X"], 0)
+		addProp(plane["CRTC_Y"], 0)
 	}
-	addProp(prop["CRTC_W"], w)
-	addProp(prop["CRTC_H"], h)
-	addProp(prop["SRC_W"], w<<16)
-	addProp(prop["SRC_H"], h<<16)
+	addProp(plane["CRTC_W"], w)
+	addProp(plane["CRTC_H"], h)
+	addProp(plane["SRC_W"], w<<16)
+	addProp(plane["SRC_H"], h<<16)
 
 	objs := []uint32{d.connID, d.crtcID, d.planeID}
 
@@ -562,7 +712,7 @@ func (d *Driver) commit(fbID uint32) error {
 	cmd.propsPtr = u64Ptr(props)
 	cmd.propValuesPtr = u64Ptr(values)
 
-	if err := ioctl(d.fd, reqModeAtomic, unsafe.Pointer(&cmd)); err != nil {
+	if err := ioctl(d.file.Fd(), reqModeAtomic, unsafe.Pointer(&cmd)); err != nil {
 		return fmt.Errorf("atomic commit: %w", err)
 	}
 	d.committed = true
@@ -576,7 +726,7 @@ func (d *Driver) createModeBlob() (uint32, error) {
 	var arg createBlob
 	arg.data = u64Ptr([]byte(unsafe.Slice((*byte)(unsafe.Pointer(&d.mode)), unsafe.Sizeof(d.mode))))
 	arg.length = uint32(unsafe.Sizeof(d.mode))
-	if err := ioctl(d.fd, reqModeCreatePropBlob, unsafe.Pointer(&arg)); err != nil {
+	if err := ioctl(d.file.Fd(), reqModeCreatePropBlob, unsafe.Pointer(&arg)); err != nil {
 		return 0, fmt.Errorf("create mode blob: %w", err)
 	}
 	return arg.blobID, nil
@@ -654,12 +804,12 @@ func (d *Driver) Close() error {
 	if d.dumbHandle != 0 {
 		var dd destroyDumb
 		dd.handle = d.dumbHandle
-		ioctl(d.fd, reqModeDestroyDumb, unsafe.Pointer(&dd))
+		ioctl(d.file.Fd(), reqModeDestroyDumb, unsafe.Pointer(&dd))
 		d.dumbHandle = 0
 	}
-	if d.fd >= 0 {
-		err := syscall.Close(d.fd)
-		d.fd = -1
+	if d.file != nil {
+		err := d.file.Close()
+		d.file = nil
 		return err
 	}
 	return nil
@@ -702,10 +852,10 @@ func probeCard(card string) (desc string, w, h int, err error) {
 		return "", 0, 0, err
 	}
 	defer fd.Close()
-	d := &Driver{card: card, fd: int(fd.Fd())}
+	d := &Driver{card: card, file: fd}
 	for _, v := range []uint64{2, 1} {
 		arg := setClientCap{capability: clientCapAtomic, value: v}
-		if err := ioctl(d.fd, reqSetClientCap, unsafe.Pointer(&arg)); err == nil {
+		if err := ioctl(d.file.Fd(), reqSetClientCap, unsafe.Pointer(&arg)); err == nil {
 			break
 		}
 	}
