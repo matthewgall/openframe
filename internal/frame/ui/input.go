@@ -239,8 +239,10 @@ func (e *Engine) doButton(kind int, b hitButton) {
 		}
 	case btnApply:
 		// A plain tap on "apply" does nothing by design: the
-		// protection is the hold.
+		// protection is the hold. Say so on the pill.
 		e.log.Info("apply requires a hold")
+		e.flashStatus("Hold to apply", 2*time.Second)
+		e.render()
 	case btnSort:
 		e.sortByName = !e.sortByName
 		e.searchTop = 0

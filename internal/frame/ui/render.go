@@ -611,9 +611,17 @@ func (e *Engine) renderSettings() {
 		case setApply:
 			bw := 320.0
 			bx := (e.w - int(bw)) / 2
-			e.cv.FillRect(bx, y, int(bw), it.h, color.NRGBA{R: 255, G: 196, B: 0, A: 46})
+			// While a transient status is flashing (Saved / Hold to
+			// apply / Failed to save), the pill wears it instead of
+			// its label; the hit area is unchanged.
+			pill := it.name
+			bg := color.NRGBA{R: 255, G: 196, B: 0, A: 46}
+			if e.statusMsg != "" && e.cfg.Now().Before(e.statusUntil) {
+				pill, bg = e.statusMsg, color.NRGBA{R: 255, G: 196, B: 0, A: 120}
+			}
+			e.cv.FillRect(bx, y, int(bw), it.h, bg)
 			f := e.cv.Font(fontBody)
-			f.DrawText(e.cv.Image(), bx+(int(bw)-f.Width(it.name))/2, y+(it.h-f.CellH())/2, it.name, colAccent)
+			f.DrawText(e.cv.Image(), bx+(int(bw)-f.Width(pill))/2, y+(it.h-f.CellH())/2, pill, colAccent)
 			e.buttons = append(e.buttons, hitButton{label: it.name, rect: [4]int{bx, y, bx + int(bw), y + it.h}, kind: btnApply})
 			y += it.h
 		}

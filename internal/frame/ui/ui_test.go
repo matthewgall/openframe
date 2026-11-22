@@ -609,6 +609,85 @@ func TestInactivityReturnsToSlideshow(t *testing.T) {
 	}
 }
 
+func applyCenter(e *Engine) (int, int) {
+	for i := range e.buttons {
+		if e.buttons[i].kind == btnApply {
+			b := &e.buttons[i]
+			return (b.rect[0] + b.rect[2]) / 2, (b.rect[1] + b.rect[3]) / 2
+		}
+	}
+	return -1, -1
+}
+
+func TestApplyPillFeedback(t *testing.T) {
+	photos := testPhotos(t, 1)
+	env := newUIEnv(t, photos, nil)
+	e := env.eng
+	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	env.nowAt(base)
+
+	// Gallery -> Settings (same path as TestSettings...).
+	env.swipe(touch.DirDown)
+	var settingsBtn *hitButton
+	for i := range e.buttons {
+		if e.buttons[i].kind == btnSettings {
+			settingsBtn = &e.buttons[i]
+		}
+	}
+	if settingsBtn == nil {
+		t.Fatal("settings row not found")
+	}
+	env.tap((settingsBtn.rect[0]+settingsBtn.rect[2])/2, (settingsBtn.rect[1]+settingsBtn.rect[3])/2)
+	if e.Screen() != ScreenSettings {
+		t.Fatalf("screen = %v, want settings", e.Screen())
+	}
+
+	// The apply block lives at the bottom of the scrollable list.
+	cx, cy := -1, -1
+	for i := 0; i < 20; i++ {
+		if cx, cy = applyCenter(e); cx >= 0 {
+			break
+		}
+		env.swipe(touch.DirDown)
+	}
+	if cx < 0 {
+		t.Fatal("apply pill not hit-testable after scrolling")
+	}
+
+	applied := false
+	e.cfg.ApplySettings = func(s Settings) error { applied = true; return nil }
+
+	// A tap must not apply, and the pill must say why.
+	env.tap(cx, cy)
+	if applied {
+		t.Fatal("tap applied settings (hold protection bypassed)")
+	}
+	if e.statusMsg != "Hold to apply" {
+		t.Fatalf("tap status = %q, want %q", e.statusMsg, "Hold to apply")
+	}
+
+	// Expiry clears the message (and re-renders the normal label).
+	env.nowAt(base.Add(3 * time.Second))
+	e.Tick(base.Add(3 * time.Second))
+	if e.statusMsg != "" {
+		t.Fatalf("status after expiry = %q, want cleared", e.statusMsg)
+	}
+
+	// A hold applies and says Saved.
+	env.hold(cx, cy)
+	if !applied {
+		t.Fatal("hold did not apply settings")
+	}
+	if e.statusMsg != "Saved" {
+		t.Fatalf("hold status = %q, want %q", e.statusMsg, "Saved")
+	}
+	env.nowAt(base.Add(30 * time.Second))
+	e.Tick(base.Add(30 * time.Second))
+	if e.statusMsg != "" {
+		t.Fatalf("Saved status did not expire: %q", e.statusMsg)
+	}
+}
+
 func TestSleepScreen(t *testing.T) {
 	photos := testPhotos(t, 1)
 	env := newUIEnv(t, photos, nil)

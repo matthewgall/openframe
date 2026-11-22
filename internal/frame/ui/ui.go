@@ -183,6 +183,12 @@ type Engine struct {
 	// sleep
 	asleep bool
 
+	// transient status text on the settings Apply pill ("Saved",
+	// "Failed to save", "Hold to apply"); empty or expired = pill
+	// shows its normal label.
+	statusMsg   string
+	statusUntil time.Time
+
 	// thermal throttle
 	throttled bool
 
@@ -343,6 +349,10 @@ func (e *Engine) Tick(now time.Time) {
 		e.controls = false
 		changed = true
 	}
+	if e.statusMsg != "" && !now.Before(e.statusUntil) {
+		e.statusMsg = "" // pill reverts to its normal label
+		changed = true
+	}
 	if e.screen != ScreenSlideshow && e.screen != ScreenSleep &&
 		now.Sub(e.lastActivity) > 120*time.Second {
 		e.goSlideshow("all", -1)
@@ -355,6 +365,13 @@ func (e *Engine) Tick(now time.Time) {
 	if changed {
 		e.render()
 	}
+}
+
+// flashStatus temporarily replaces the settings Apply pill label
+// (callers hold e.mu). The Tick expiry re-renders without it.
+func (e *Engine) flashStatus(msg string, dur time.Duration) {
+	e.statusMsg = msg
+	e.statusUntil = e.cfg.Now().Add(dur)
 }
 
 // SetThrottled is called by the thermal monitor; the slideshow interval

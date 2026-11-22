@@ -61,6 +61,8 @@ func (e *Engine) applySettings() {
 	}
 	if err := e.cfg.ApplySettings(e.staged); err != nil {
 		e.log.Error("settings apply failed", "error", err)
+		e.flashStatus("Failed to save", 4*time.Second)
+		e.render()
 		return
 	}
 	e.applyLive(e.staged)
@@ -70,6 +72,7 @@ func (e *Engine) applySettings() {
 		"transition", e.staged.Transition,
 		"orientation", e.staged.Orientation,
 		"sleep", minutesToHM(e.staged.SleepOn)+"-"+minutesToHM(e.staged.SleepOff))
+	e.flashStatus("Saved", 3*time.Second)
 	e.render()
 }
 
