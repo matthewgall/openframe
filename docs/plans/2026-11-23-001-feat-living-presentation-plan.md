@@ -191,7 +191,7 @@ arrivals: sync activation tx ──► sync_state["arrivals"] {ts, hashes[≤8]}
 
 ---
 
-- [ ] U2. **Server: manifest carries the photo uploader display name**
+- [x] U2. **Server: manifest carries the photo uploader display name**
 
 **Goal:** `manifest.Photo` gains the uploader's human name so frames can attribute arrivals (R12).
 
@@ -221,7 +221,7 @@ arrivals: sync activation tx ──► sync_state["arrivals"] {ts, hashes[≤8]}
 
 ---
 
-- [ ] U3. **Frame sync: persist uploader and detect arrivals at activation**
+- [x] U3. **Frame sync: persist uploader and detect arrivals at activation**
 
 **Goal:** frame stores per-photo uploader + upload time; activation computes the new-arrival set (R10 silent-first-population) and delivers it to the UI in memory — no persistent arrivals row (Decision 5).
 
@@ -390,7 +390,7 @@ arrivals: sync activation tx ──► sync_state["arrivals"] {ts, hashes[≤8]}
 
 ---
 
-- [ ] U7. **Arrival debuts and the "from Sarah" ribbon**
+- [x] U7. **Arrival debuts and the "from Sarah" ribbon**
 
 **Goal:** implement F2 end-to-end: queue from activation, next-slot debut, fading chrome-layer ribbon, caps, sleep behaviour.
 
