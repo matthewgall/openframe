@@ -12,7 +12,10 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/matthewgall/openframe/internal/frame/display"
 	"github.com/matthewgall/openframe/internal/frame/imgutil"
@@ -50,15 +53,28 @@ type Driver struct {
 	crtcProps  map[string]uint32
 	planeProps map[string]uint32
 
-	// dumb buffer state
-	dumbHandle uint32
-	dumbPitch  uint32
-	buf        []byte // mmap'd dumb buffer
-	// fbID is created once alongside the dumb buffer and reused by
-	// every commit: the old create-per-present churn cost two ioctls
-	// and a kernel object per animation frame (30/s) for zero gain -
-	// the FB is just a reference to the same dumb buffer memory.
-	fbID uint32
+	// Dual full-resolution scanout buffers, flip-synced page flips.
+	// The panel scans the front slot while we paint the back slot;
+	// a flip-complete event tells us when a slot has been handed off,
+	// so we never overwrite memory the HVS is actively reading -
+	// single-buffer presents tore (and still did before, the stutter
+	// just hid it). Slot 0 starts life as front.
+	handles [2]uint32
+	pitches [2]uint32
+	bufs    [2][]byte
+	fbs     [2]uint32
+
+	front     int // slot the panel is displaying (our view)
+	pending   [2]bool
+	evq       []int  // slots with queued flip-complete events
+	lastFB    uint32 // framebuffer id of the last successful commit
+	stallLogN int    // rate-limits the "flip event stalled" warning
+	evbuf     [64]byte
+
+	// fbID-style persistence applies to the pair: created once at
+	// Init, reused forever (the FB is just a reference to the same
+	// dumb-buffer memory; per-present create/destroy churned two
+	// ioctls and a kernel object per frame for zero gain).
 
 	// half-resolution scanout pair for the crossfade transition:
 	// blending at 1/4 the bytes against the HVS doing the upscale is
@@ -688,40 +704,29 @@ func (d *Driver) Init(_ context.Context) error {
 }
 
 func (d *Driver) setupDumbBuffer() error {
-	var create createDumb
-	create.width, create.height, create.bpp = uint32(d.width), uint32(d.height), 32
-	if err := ioctl(d.file.Fd(), reqModeCreateDumb, unsafe.Pointer(&create)); err != nil {
-		return fmt.Errorf("create dumb buffer: %w", err)
+	for i := range d.bufs {
+		if err := d.allocSlot(i); err != nil {
+			return err
+		}
 	}
-	d.dumbHandle = create.handle
-	d.dumbPitch = create.pitch
-
-	var mapArg mapDumb
-	mapArg.handle = create.handle
-	if err := ioctl(d.file.Fd(), reqModeMapDumb, unsafe.Pointer(&mapArg)); err != nil {
-		return fmt.Errorf("map dumb buffer: %w", err)
-	}
-	mmapLen := int(create.size)
-	if mmapLen <= 0 {
-		mmapLen = int(d.dumbPitch) * d.height
-	}
-	// The dumb buffer is mapped through the DRM file descriptor (the
-	// offset from MAP_DUMB is an offset into that fd, not into fd -1).
-	ptr, err := syscall.Mmap(int(d.file.Fd()), int64(mapArg.offset), mmapLen, syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
-	if err != nil {
-		return fmt.Errorf("mmap dumb buffer: %w", err)
-	}
-	d.buf = unsafe.Slice((*byte)(unsafe.Pointer(&ptr[0])), len(ptr))
 
 	// The mode blob is fixed for the life of the driver: create it
 	// once, reuse it in every commit. It must exist before the first
 	// commit, which references it as MODE_ID.
-	if d.modeBlob, err = d.createModeBlob(); err != nil {
+	blob, err := d.createModeBlob()
+	if err != nil {
 		return err
 	}
-	// The framebuffer likewise: same dumb buffer, same FB, forever.
-	if d.fbID, err = d.addFB(); err != nil {
-		return err
+	d.modeBlob = blob
+
+	// Framebuffers likewise: one per slot, created once, reused
+	// forever.
+	for i := range d.fbs {
+		fb, err := d.fbFor(d.handles[i], d.pitches[i])
+		if err != nil {
+			return err
+		}
+		d.fbs[i] = fb
 	}
 
 	// Half-resolution scanout buffer for crossfades (see struct
@@ -734,7 +739,8 @@ func (d *Driver) setupDumbBuffer() error {
 		}
 	}
 
-	// First frame: black, with the mode applied.
+	// First frame: black on BOTH slots (a flip must never expose
+	// uninitialized memory), with the mode applied.
 	if err := d.presentBlack(); err != nil {
 		return err
 	}
@@ -745,23 +751,135 @@ func (d *Driver) setupDumbBuffer() error {
 	return nil
 }
 
-func (d *Driver) presentBlack() error {
-	for i := range d.buf {
-		d.buf[i] = 0
+// allocSlot creates and mmaps one full-resolution dumb buffer.
+func (d *Driver) allocSlot(i int) error {
+	var create createDumb
+	create.width, create.height, create.bpp = uint32(d.width), uint32(d.height), 32
+	if err := ioctl(d.file.Fd(), reqModeCreateDumb, unsafe.Pointer(&create)); err != nil {
+		return fmt.Errorf("create dumb buffer %d: %w", i, err)
 	}
-	return d.commit()
+	d.handles[i] = create.handle
+	d.pitches[i] = create.pitch
+
+	var mapArg mapDumb
+	mapArg.handle = create.handle
+	if err := ioctl(d.file.Fd(), reqModeMapDumb, unsafe.Pointer(&mapArg)); err != nil {
+		return fmt.Errorf("map dumb buffer %d: %w", i, err)
+	}
+	mmapLen := int(create.size)
+	if mmapLen <= 0 {
+		mmapLen = int(d.pitches[i]) * d.height
+	}
+	// The dumb buffer is mapped through the DRM file descriptor (the
+	// offset from MAP_DUMB is an offset into that fd, not into fd -1).
+	ptr, err := syscall.Mmap(int(d.file.Fd()), int64(mapArg.offset), mmapLen, syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
+	if err != nil {
+		return fmt.Errorf("mmap dumb buffer %d: %w", i, err)
+	}
+	d.bufs[i] = unsafe.Slice((*byte)(unsafe.Pointer(&ptr[0])), len(ptr))
+	return nil
 }
 
-// PresentFrame implements display.Driver. It copies the frame into
-// the dumb buffer and commits it atomically through the persistent
-// framebuffer.
+// fbFor wraps a dumb buffer handle in a persistent framebuffer
+// object at panel size.
+func (d *Driver) fbFor(handle, pitch uint32) (uint32, error) {
+	var fb fbCmd2
+	fb.width, fb.height = uint32(d.width), uint32(d.height)
+	fb.pixelFormat = formatXRGB8888
+	fb.handles[0] = handle
+	fb.pitches[0] = pitch
+	if err := ioctl(d.file.Fd(), reqModeAddFB2, unsafe.Pointer(&fb)); err != nil {
+		return 0, fmt.Errorf("addfb2: %w", err)
+	}
+	return fb.fbID, nil
+}
+
+func (d *Driver) presentBlack() error {
+	for _, b := range d.bufs {
+		for i := range b {
+			b[i] = 0
+		}
+	}
+	// The initial commit is the modeset; no flip event is requested
+	// (nothing is double-buffered yet from the kernel's viewpoint).
+	return d.commitFB(0, d.fbs[0], d.width, d.height, false)
+}
+
+// PresentFrame implements display.Driver. It paints the back slot and
+// flips to it, waiting for the previous flip's completion event so
+// the panel is never reading the memory being overwritten.
 func (d *Driver) PresentFrame(_ context.Context, img *image.NRGBA) error {
 	if img.Bounds() != (image.Rectangle{Max: image.Point{d.width, d.height}}) {
 		return fmt.Errorf("drm: frame is %dx%d, want %dx%d", img.Bounds().Dx(), img.Bounds().Dy(), d.width, d.height)
 	}
-	pitch := int(d.dumbPitch)
-	writeXRGB8888(d.buf, img.Pix, d.width, d.height, pitch)
-	return d.commit()
+	back, err := d.beginPaintBack()
+	if err != nil {
+		return err
+	}
+	writeXRGB8888(d.bufs[back], img.Pix, d.width, d.height, int(d.pitches[back]))
+	return d.commitFB(back, d.fbs[back], d.width, d.height, true)
+}
+
+// beginPaintBack returns the writable back slot, waiting (bounded)
+// for the pending flip to hand the panel over. The back slot is only
+// safe once the PREVIOUS commit's flip event has arrived: until then
+// the panel is still scanning what used to be the back buffer.
+// On event timeout we proceed anyway - worst case is the tearing the
+// single-buffer driver always had, never a stall.
+func (d *Driver) beginPaintBack() (int, error) {
+	if d.fbs[0] == 0 || d.fbs[1] == 0 {
+		return 0, fmt.Errorf("drm: not initialised")
+	}
+	prev := d.front
+	if d.pending[prev] {
+		deadline := time.Now().Add(40 * time.Millisecond)
+		for d.pending[prev] && time.Now().Before(deadline) {
+			d.pollEvent(5 * time.Millisecond)
+		}
+		if d.pending[prev] {
+			// The kernel never delivered the event (merged/replaced
+			// flip). Unlock rather than stall the pipeline; one torn
+			// frame beats a frozen one.
+			if d.stallLogN < 3 {
+				d.log.Warn("drm: flip event stalled; presenting unlocked", "stalls", d.stallLogN)
+			}
+			d.stallLogN++
+			d.pending[0], d.pending[1], d.evq = false, false, d.evq[:0]
+		}
+	}
+	return 1 - d.front, nil
+}
+
+// pollEvent waits up to dur for one DRM event on the card fd and
+// consumes it, popping the flip FIFO. A flip commit always produces
+// exactly one event; ours are the only source.
+func (d *Driver) pollEvent(dur time.Duration) bool {
+	fd := int(d.file.Fd())
+	pfd := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
+	for {
+		n, err := unix.Poll(pfd, int(dur/time.Millisecond))
+		if err == syscall.EINTR {
+			continue
+		}
+		if err != nil || n == 0 {
+			return false
+		}
+		break
+	}
+	n, err := syscall.Read(fd, d.evbuf[:])
+	if err != nil || n < 8 {
+		return false
+	}
+	// struct drm_event header: u32 type, u32 length. We only ever
+	// request flip events; pop the FIFO on any event received.
+	if len(d.evq) > 0 {
+		h := d.evq[0]
+		d.evq = d.evq[1:]
+		if h >= 0 && h < 2 {
+			d.pending[h] = false
+		}
+	}
+	return true
 }
 
 func (d *Driver) setupHalfBuffer(hw, hh int) error {
@@ -818,52 +936,48 @@ func (d *Driver) PresentTransition(_ context.Context, base, top *image.NRGBA, mo
 		}
 		if d.halfFB != 0 && base.Bounds() == half && top.Bounds() == half {
 			writeBlendXRGB8888(d.halfBuf, base.Pix, top.Pix, d.halfW, d.halfH, int(d.halfPitch), p)
-			return d.commitSized(d.halfFB, d.halfW, d.halfH)
+			// Single half buffer, no flip event: a dissolve mid-frame
+			// hides any torn line; endpoint stills go through the
+			// double-buffered full path.
+			return d.commitFB(-1, d.halfFB, d.halfW, d.halfH, false)
 		}
 		if base.Bounds() != want || top.Bounds() != want {
 			return fmt.Errorf("drm: transition images %v/%v, want %v or %v", base.Bounds().Size(), top.Bounds().Size(), want.Size(), half.Size())
 		}
-		writeBlendXRGB8888(d.buf, base.Pix, top.Pix, d.width, d.height, int(d.dumbPitch), p)
-		return d.commitSized(d.fbID, d.width, d.height)
+		back, err := d.beginPaintBack()
+		if err != nil {
+			return err
+		}
+		writeBlendXRGB8888(d.bufs[back], base.Pix, top.Pix, d.width, d.height, int(d.pitches[back]), p)
+		return d.commitFB(back, d.fbs[back], d.width, d.height, true)
 	case "slide":
 		if base.Bounds() != want || top.Bounds() != want {
 			return fmt.Errorf("drm: transition images %v/%v, want %v", base.Bounds().Size(), top.Bounds().Size(), want.Size())
 		}
-		writeSlideXRGB8888(d.buf, base.Pix, top.Pix, d.width, d.height, int(d.dumbPitch), int(float64(d.width)*t))
-		return d.commitSized(d.fbID, d.width, d.height)
+		back, err := d.beginPaintBack()
+		if err != nil {
+			return err
+		}
+		writeSlideXRGB8888(d.bufs[back], base.Pix, top.Pix, d.width, d.height, int(d.pitches[back]), int(float64(d.width)*t))
+		return d.commitFB(back, d.fbs[back], d.width, d.height, true)
 	default:
 		return fmt.Errorf("drm: no fused transition for %q", mode)
 	}
-}
-
-// addFB wraps the current dumb-buffer contents in a new framebuffer
-// object and returns its id.
-func (d *Driver) addFB() (uint32, error) {
-	var fb fbCmd2
-	fb.width, fb.height = uint32(d.width), uint32(d.height)
-	fb.pixelFormat = formatXRGB8888
-	fb.handles[0] = d.dumbHandle
-	fb.pitches[0] = d.dumbPitch
-	if err := ioctl(d.file.Fd(), reqModeAddFB2, unsafe.Pointer(&fb)); err != nil {
-		return 0, fmt.Errorf("addfb2: %w", err)
-	}
-	return fb.fbID, nil
 }
 
 func (d *Driver) rmFB(id uint32) {
 	ioctl(d.file.Fd(), reqModeRMFB, unsafe.Pointer(&id)) // best effort
 }
 
-// commit performs the atomic commit at full panel size.
-func (d *Driver) commit() error {
-	return d.commitSized(d.fbID, d.width, d.height)
-}
-
-// commitSized commits fbID filling the panel, with the source
-// rectangle sized srcW x srcH pixels (half for the upscaled
-// crossfade path, panel size otherwise).
-func (d *Driver) commitSized(fbID uint32, srcW, srcH int) error {
-
+// commitFB performs one atomic commit: connector -> crtc, crtc mode
+// active, plane -> fbID filling the panel with a srcW x srcH source
+// rectangle (half-size for the upscaled crossfade path). slot is the
+// ping-pong buffer index for full-size commits, or -1 for sources
+// outside the pair (half buffer). wantEvent requests a flip-complete
+// event for FB-changing commits so the next paint of the other slot
+// can be vsync-locked; bookkeeping (front/pending/FIFO) happens here
+// on success. The first commit requests a mode set.
+func (d *Driver) commitFB(slot int, fbID uint32, srcW, srcH int, wantEvent bool) error {
 	// Properties are resolved per object: an atomic commit may only set
 	// properties the object owns, and duplicated names (vc4's per-plane
 	// "rotation"/"alpha"/...) belong to a specific object.
@@ -921,6 +1035,10 @@ func (d *Driver) commitSized(fbID uint32, srcW, srcH int) error {
 	if !d.committed {
 		cmd.flags |= atomicAllowModeSet
 	}
+	flip := wantEvent && slot >= 0 && fbID != d.lastFB
+	if flip {
+		cmd.flags |= atomicFlipEvent
+	}
 	cmd.countObjs = uint32(len(objs))
 	cmd.objsPtr = u64Ptr(objs)
 	cmd.countPropsPtr = u64Ptr(counts)
@@ -930,6 +1048,14 @@ func (d *Driver) commitSized(fbID uint32, srcW, srcH int) error {
 	if err := ioctl(d.file.Fd(), reqModeAtomic, unsafe.Pointer(&cmd)); err != nil {
 		return fmt.Errorf("atomic commit: %w", err)
 	}
+	if slot >= 0 {
+		d.front = slot
+	}
+	if flip {
+		d.pending[slot] = true
+		d.evq = append(d.evq, slot)
+	}
+	d.lastFB = fbID
 	d.committed = true
 	return nil
 }
@@ -1022,20 +1148,26 @@ func (d *Driver) Close() error {
 		ioctl(d.file.Fd(), reqModeDestroyDumb, unsafe.Pointer(&dd))
 		d.halfHandle = 0
 	}
-	if d.fbID != 0 {
-		d.rmFB(d.fbID)
-		d.fbID = 0
+	for i := range d.fbs {
+		if d.fbs[i] != 0 {
+			d.rmFB(d.fbs[i])
+			d.fbs[i] = 0
+		}
 	}
-	if len(d.buf) > 0 {
-		syscall.Munmap(d.buf)
-		d.buf = nil
+	for i := range d.bufs {
+		if len(d.bufs[i]) > 0 {
+			syscall.Munmap(d.bufs[i])
+			d.bufs[i] = nil
+		}
+		if d.handles[i] != 0 {
+			var dd destroyDumb
+			dd.handle = d.handles[i]
+			ioctl(d.file.Fd(), reqModeDestroyDumb, unsafe.Pointer(&dd))
+			d.handles[i] = 0
+		}
 	}
-	if d.dumbHandle != 0 {
-		var dd destroyDumb
-		dd.handle = d.dumbHandle
-		ioctl(d.file.Fd(), reqModeDestroyDumb, unsafe.Pointer(&dd))
-		d.dumbHandle = 0
-	}
+	d.evq = nil
+	d.pending[0], d.pending[1] = false, false
 	if d.file != nil {
 		err := d.file.Close()
 		d.file = nil

@@ -54,11 +54,18 @@ const (
 	modeTypeUserDef   = 1 << 5
 )
 
-// Atomic commit flags.
+// Atomic commit flags. DRM_MODE_PAGE_FLIP_EVENT is shared with the
+// legacy ioctls and accepted in drm_mode_atomic.flags: the kernel
+// then emits a flip-complete event on the card fd when the new
+// framebuffer goes live (the vsync lock for ping-pong buffers).
+// Value pinned from the kernel uapi (v6.18): PAGE_FLIP_EVENT is 0x01.
+// (It is NOT the legacy 0x20 bit - using that reads as an unknown
+// flag and every event commit fails EINVAL; verified live.)
 const (
 	atomicTestOnly     = 0x0100
 	atomicNonBlock     = 0x0200
 	atomicAllowModeSet = 0x0400
+	atomicFlipEvent    = 0x0001 // DRM_MODE_PAGE_FLIP_EVENT (uapi)
 )
 
 // CRTC rotation bits (DRM_MODE_ROTATE_*).
