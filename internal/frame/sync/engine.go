@@ -86,6 +86,8 @@ type manifestPhoto struct {
 	Name        string        `json:"name"`
 	Caption     string        `json:"caption,omitempty"`
 	CaptureDate string        `json:"capture_date,omitempty"`
+	Uploader    string        `json:"uploader,omitempty"`    // display name (arrival ribbon)
+	UploadedAt  string        `json:"uploaded_at,omitempty"` // server receipt time (debut order)
 	Priority    bool          `json:"priority,omitempty"`
 	Favourite   bool          `json:"favourite,omitempty"`
 	Display     *manifestFile `json:"display,omitempty"`
@@ -147,10 +149,13 @@ type Engine struct {
 
 	// onActivate is called (synchronously, on the download loop's
 	// goroutine) after a collection has been committed active. The
-	// M4 UI uses it to reload its data; the callback must be fast and
+	// M4 UI uses it to reload its data and to seed the arrival debut
+	// queue (arrivals = hashes new to the previously-active set,
+	// ordered by upload time, capped; empty on first population per
+	// the silent-init rule). The callback must be fast and
 	// non-blocking.
 	activateMu sync.Mutex
-	onActivate func(revision int64)
+	onActivate func(revision int64, arrivals []string)
 
 	// onConfig is called (synchronously, on the goroutine that ran
 	// Check) when the server's per-frame configuration advances.
@@ -303,20 +308,69 @@ func (e *Engine) PendingDownloads(ctx context.Context) int {
 }
 
 // OnActivate registers a callback fired after each successful
-// activation with the new collection revision. It must be called
-// before the loops start (or otherwise synchronized with them).
-func (e *Engine) OnActivate(fn func(revision int64)) {
+// activation with the new collection revision and the hashes that are
+// new against the previously-active set (nil on first population —
+// arrivals there are noise, not news; living-presentation R10).
+// It must be called before the loops start (or otherwise synchronized
+// with them).
+func (e *Engine) OnActivate(fn func(revision int64, arrivals []string)) {
 	e.activateMu.Lock()
 	e.onActivate = fn
 	e.activateMu.Unlock()
 }
 
-func (e *Engine) fireActivate(rev int64) {
+// newArrivals computes the arrival set for a staged collection
+// INSIDE the activation transaction, before the photos table is
+// swapped: hashes present in staging for this revision but absent
+// from the active set, ordered by server upload time (R7), capped at
+// maxArrivals. An empty active set (first population, fresh pairing)
+// yields nothing: debuting an entire inherited library is a ribbon
+// storm, not a welcome (R10/AE6).
+const maxArrivals = 8
+
+func newArrivals(ctx context.Context, tx *sql.Tx, rev int64) ([]string, error) {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT sp.hash FROM staging_photos sp
+		  WHERE sp.collection_revision = ?
+		    AND sp.hash NOT IN (SELECT hash FROM photos)
+		  ORDER BY CASE WHEN sp.uploaded_at = '' THEN 1 ELSE 0 END,
+		           sp.uploaded_at, sp.hash`, rev)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Silent first population: the active set being empty means this
+	// is the inherited library, not an arrival wave.
+	var active int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM photos`).Scan(&active); err != nil {
+		return nil, err
+	}
+	if active == 0 {
+		return nil, nil
+	}
+	if len(out) > maxArrivals {
+		out = out[:maxArrivals]
+	}
+	return out, nil
+}
+
+func (e *Engine) fireActivate(rev int64, arrivals []string) {
 	e.activateMu.Lock()
 	fn := e.onActivate
 	e.activateMu.Unlock()
 	if fn != nil {
-		fn(rev)
+		fn(rev, arrivals)
 	}
 }
 
@@ -578,12 +632,12 @@ func (e *Engine) stageManifest(ctx context.Context, body []byte) (*manifest, boo
 				`INSERT INTO staging_photos (collection_revision, hash, album_id, name, caption,
 				                             capture_date, display_bytes, thumb_bytes,
 				                             display_sha, thumb_sha, display_resource, thumb_resource,
-				                             priority, is_favourite)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				                             priority, is_favourite, uploader, uploaded_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				m.Revision, p.Hash, a.ID, p.Name, p.Caption, nullIfEmpty(p.CaptureDate),
 				int64Or0(p.Display), int64Or0(p.Thumb),
 				nullIfEmpty(disSHA), nullIfEmpty(thSHA), nullIfEmpty(disRes), nullIfEmpty(thRes),
-				boolInt(p.Priority), boolInt(p.Favourite)); err != nil {
+				boolInt(p.Priority), boolInt(p.Favourite), p.Uploader, p.UploadedAt); err != nil {
 				return nil, false, fmt.Errorf("stage photo %s: %w", p.Hash, err)
 			}
 			// Server-authoritative favourite (no pending local op).
@@ -974,6 +1028,13 @@ func (e *Engine) maybeActivate(ctx context.Context) {
 	// 2. Photos: replace the active set with the staged set, writing
 	//    the verified cache paths. Favourite state: local favourites
 	//    win over the manifest when present (offline changes).
+	//    Arrivals must be computed BEFORE the swap (the old active set
+	//    is the diff baseline) but delivered only after commit.
+	arrivals, err := newArrivals(ctx, tx, rev)
+	if err != nil {
+		e.log.Error("arrival diff failed", "error", err)
+		arrivals = nil
+	}
 	if err := activatePhotos(ctx, tx, rev, e); err != nil {
 		e.log.Error("activation photos failed", "error", err)
 		return
@@ -1012,7 +1073,7 @@ func (e *Engine) maybeActivate(ctx context.Context) {
 	e.resetFailures(ctx)
 	e.gc(ctx)
 	e.log.Info("collection activated", "revision", rev)
-	e.fireActivate(rev)
+	e.fireActivate(rev, arrivals)
 }
 
 // activatePhotos swaps the active photos table to the staged set.
@@ -1021,7 +1082,8 @@ func activatePhotos(ctx context.Context, tx *sql.Tx, rev int64, e *Engine) error
 		`SELECT sp.hash, sp.album_id, sp.name, sp.caption, sp.capture_date,
 		        sp.display_bytes, sp.thumb_bytes, sp.priority, sp.is_favourite,
 		        sp.display_sha IS NOT NULL AND sp.display_sha != '',
-		        sp.thumb_sha IS NOT NULL AND sp.thumb_sha != ''
+		        sp.thumb_sha IS NOT NULL AND sp.thumb_sha != '',
+		        sp.uploader, sp.uploaded_at
 		   FROM staging_photos sp WHERE sp.collection_revision = ?`, rev)
 	if err != nil {
 		return err
@@ -1031,6 +1093,7 @@ func activatePhotos(ctx context.Context, tx *sql.Tx, rev int64, e *Engine) error
 		disB, thB                             int64
 		prio, fav                             int
 		haveDis, haveTh                       bool
+		uploader, uploadedAt                  string
 	}
 	var photos []actPhoto
 	hashes := []string{}
@@ -1038,7 +1101,8 @@ func activatePhotos(ctx context.Context, tx *sql.Tx, rev int64, e *Engine) error
 		var p actPhoto
 		var capDate sql.NullString
 		if err := rows.Scan(&p.hash, &p.albumID, &p.name, &p.caption, &capDate,
-			&p.disB, &p.thB, &p.prio, &p.fav, &p.haveDis, &p.haveTh); err != nil {
+			&p.disB, &p.thB, &p.prio, &p.fav, &p.haveDis, &p.haveTh,
+			&p.uploader, &p.uploadedAt); err != nil {
 			rows.Close()
 			return err
 		}
@@ -1072,17 +1136,18 @@ func activatePhotos(ctx context.Context, tx *sql.Tx, rev int64, e *Engine) error
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO photos (hash, album_id, name, caption, capture_date,
 			                     display_bytes, thumb_bytes, display_path, thumb_path,
-			                     priority, is_favourite, downloaded_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			                     priority, is_favourite, downloaded_at, uploader, uploaded_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(hash) DO UPDATE SET
 			   album_id = excluded.album_id, name = excluded.name,
 			   caption = excluded.caption, capture_date = excluded.capture_date,
 			   display_bytes = excluded.display_bytes, thumb_bytes = excluded.thumb_bytes,
 			   display_path = excluded.display_path, thumb_path = excluded.thumb_path,
-			   priority = excluded.priority, is_favourite = excluded.is_favourite`,
+			   priority = excluded.priority, is_favourite = excluded.is_favourite,
+			   uploader = excluded.uploader, uploaded_at = excluded.uploaded_at`,
 			p.hash, p.albumID, p.name, p.caption, nullIfEmpty(p.capture),
 			p.disB, p.thB, disPath, nullIfEmpty(thPath), p.prio, fav,
-			time.Now().UTC().Format(time.RFC3339)); err != nil {
+			time.Now().UTC().Format(time.RFC3339), p.uploader, p.uploadedAt); err != nil {
 			return fmt.Errorf("activate photo %s: %w", p.hash, err)
 		}
 	}

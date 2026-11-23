@@ -136,9 +136,15 @@ func (f *Frame) buildDisplay(ctx context.Context) (*uiState, error) {
 	}
 
 	// Sync activations refresh the UI (and only the UI): the active
-	// collection changed atomically, the engine re-reads it.
-	f.engine.OnActivate(func(revision int64) {
+	// collection changed atomically, the engine re-reads it. The
+	// arrival list (hashes new vs the previous active set) seeds the
+	// debut queue (U7); until that lands the count is logged so the
+	// signal is observable in the field.
+	f.engine.OnActivate(func(revision int64, arrivals []string) {
 		eng.Reload(ctx)
+		if len(arrivals) > 0 {
+			f.log.Info("photos arrived", "revision", revision, "count", len(arrivals))
+		}
 		f.log.Info("display refreshed after activation", "revision", revision)
 	})
 
@@ -434,7 +440,7 @@ func (d *frameData) Collection(ctx context.Context) ([]ui.Album, []ui.Photo, err
 		return nil, nil, err
 	}
 	rows, err := f.db.QueryContext(ctx,
-		`SELECT hash, name, caption, album_id, capture_date, priority
+		`SELECT hash, name, caption, album_id, capture_date, priority, uploader
 		   FROM photos
 		  ORDER BY
 		    CASE WHEN capture_date IS NULL OR capture_date = '' THEN 1 ELSE 0 END,
@@ -446,13 +452,14 @@ func (d *frameData) Collection(ctx context.Context) ([]ui.Album, []ui.Photo, err
 	type row struct {
 		hash, name, caption, albumID string
 		capture                      string
+		uploader                     string
 		priority                     bool
 	}
 	var rs []row
 	for rows.Next() {
 		var r row
 		var cap sql.NullString
-		if err := rows.Scan(&r.hash, &r.name, &r.caption, &r.albumID, &cap, &r.priority); err != nil {
+		if err := rows.Scan(&r.hash, &r.name, &r.caption, &r.albumID, &cap, &r.priority, &r.uploader); err != nil {
 			return nil, nil, err
 		}
 		r.capture = cap.String
@@ -475,6 +482,7 @@ func (d *frameData) Collection(ctx context.Context) ([]ui.Album, []ui.Photo, err
 			Caption:   r.caption,
 			AlbumID:   r.albumID,
 			AlbumName: albumName[r.albumID],
+			Uploader:  r.uploader,
 			Priority:  r.priority,
 		}
 		if r.capture != "" {

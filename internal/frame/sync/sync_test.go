@@ -63,6 +63,9 @@ type testPhoto struct {
 	thumb   fileSpec
 	prio    bool
 	fav     bool
+	// arrival attribution (manifest uploader fields)
+	uploader   string
+	uploadedAt string // RFC3339; empty omits the field
 }
 
 func newTestPhoto(hash string) testPhoto {
@@ -87,6 +90,12 @@ func (f *fakeServer) manifestJSON() []byte {
 	for _, p := range f.photos {
 		m := map[string]any{
 			"hash": p.hash, "name": p.hash + ".jpg", "width": 100, "height": 100,
+		}
+		if p.uploader != "" {
+			m["uploader"] = p.uploader
+		}
+		if p.uploadedAt != "" {
+			m["uploaded_at"] = p.uploadedAt
 		}
 		if p.prio {
 			m["priority"] = true
@@ -341,7 +350,12 @@ func TestOnActivateHook(t *testing.T) {
 	e := newSyncEnv(t, p)
 
 	var calls []int64
-	e.eng.OnActivate(func(rev int64) { calls = append(calls, rev) })
+	e.eng.OnActivate(func(rev int64, arrivals []string) {
+		calls = append(calls, rev)
+		if len(arrivals) != 0 {
+			t.Errorf("first population must deliver no arrivals, got %v", arrivals)
+		}
+	})
 
 	e.runSync(ctx)
 
@@ -783,5 +797,102 @@ func TestDeviceNameSelfHealsOnDrift(t *testing.T) {
 	e.eng.DownloadOnce(ctx)
 	if got := storedDeviceName(t, e.dbh); got != "Test Frame" {
 		t.Fatalf("device_name = %q after drift, want self-heal to Test Frame", got)
+	}
+}
+
+// ---------------------------------------------------------------------
+// arrival detection (living-presentation R7/R9/R10)
+
+func TestArrivalsDeliveredOnGrowth(t *testing.T) {
+	ctx := context.Background()
+	p1 := newTestPhoto(strings.Repeat("a", 64))
+	p2 := newTestPhoto(strings.Repeat("b", 64))
+	p2.uploader, p2.uploadedAt = "Sarah", "2026-01-02T00:00:00Z"
+	e := newSyncEnv(t, p1)
+
+	var got []string
+	e.eng.OnActivate(func(rev int64, arrivals []string) { got = arrivals })
+	e.runSync(ctx)
+	if len(got) != 0 {
+		t.Fatalf("first population arrivals = %v, want none (R10)", got)
+	}
+
+	e.fake.photos = append(e.fake.photos, p2)
+	e.fake.rev = 2
+	e.runSync(ctx)
+	if len(got) != 1 || got[0] != p2.hash {
+		t.Fatalf("arrivals after growth = %v, want [%s]", got, p2.hash[:8])
+	}
+	// The attribution survived the staging→active carry-through.
+	var uploader, uploadedAt string
+	e.dbh.QueryRow("SELECT uploader, uploaded_at FROM photos WHERE hash = ?", p2.hash).Scan(&uploader, &uploadedAt)
+	if uploader != "Sarah" || uploadedAt != "2026-01-02T00:00:00Z" {
+		t.Errorf("photos attribution columns = (%q,%q), want Sarah + timestamp", uploader, uploadedAt)
+	}
+}
+
+func TestArrivalsOrderedByUploadTimeAndCapped(t *testing.T) {
+	ctx := context.Background()
+	base := newTestPhoto(strings.Repeat("a", 64))
+	e := newSyncEnv(t, base)
+	e.runSync(ctx)
+
+	// Nine newcomers with deliberately inverted insertion vs upload
+	// order: index 0 was uploaded LAST.
+	var wave []testPhoto
+	for i := 0; i < 9; i++ {
+		p := newTestPhoto(fmt.Sprintf("%02d", i) + strings.Repeat("c", 62))
+		p.uploadedAt = fmt.Sprintf("2026-01-%02dT00:00:00Z", 20-i) // newest first inserted
+		wave = append(wave, p)
+	}
+	e.fake.photos = append(e.fake.photos, wave...)
+	e.fake.rev = 2
+
+	var got []string
+	e.eng.OnActivate(func(rev int64, arrivals []string) { got = arrivals })
+	e.runSync(ctx)
+	if len(got) != maxArrivals {
+		t.Fatalf("arrivals len = %d, want cap %d", len(got), maxArrivals)
+	}
+	// Earliest upload (wave[8]: 2026-01-12) must debut first.
+	if got[0] != wave[8].hash {
+		t.Errorf("first arrival = %s, want earliest upload %s", got[0][:8], wave[8].hash[:8])
+	}
+	for i := 1; i < len(got); i++ {
+		// ascending upload time check via the staging table values
+		var prevAt, curAt string
+		e.dbh.QueryRow("SELECT uploaded_at FROM photos WHERE hash = ?", got[i-1]).Scan(&prevAt)
+		e.dbh.QueryRow("SELECT uploaded_at FROM photos WHERE hash = ?", got[i]).Scan(&curAt)
+		if curAt < prevAt {
+			t.Errorf("arrivals not upload-ordered at %d: %s before %s", i, prevAt, curAt)
+		}
+	}
+}
+
+func TestArrivalsSilentOnAttributionOnlyChange(t *testing.T) {
+	ctx := context.Background()
+	p := newTestPhoto(strings.Repeat("d", 64))
+	p.uploader, p.uploadedAt = "Tim", "2026-01-01T00:00:00Z"
+	e := newSyncEnv(t, p)
+	e.runSync(ctx)
+
+	// Server-side rename of the display name: same hashes, new
+	// revision, zero arrivals (and nothing to disturb downstream).
+	e.fake.photos[0].uploader = "Timothy"
+	e.fake.rev = 2
+	var fired bool
+	var got []string
+	e.eng.OnActivate(func(rev int64, arrivals []string) { fired = true; got = arrivals })
+	e.runSync(ctx)
+	if !fired {
+		t.Fatal("activation hook should still fire on attribution-only revision")
+	}
+	if len(got) != 0 {
+		t.Errorf("arrivals = %v, want empty for unchanged hash set", got)
+	}
+	var uploader string
+	e.dbh.QueryRow("SELECT uploader FROM photos WHERE hash = ?", p.hash).Scan(&uploader)
+	if uploader != "Timothy" {
+		t.Errorf("uploader = %q, refreshed to Timothy expected", uploader)
 	}
 }
