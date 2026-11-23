@@ -47,12 +47,20 @@ type Photo struct {
 	Name        string `json:"name"`
 	Caption     string `json:"caption,omitempty"`
 	CaptureDate string `json:"capture_date,omitempty"` // RFC3339
-	Priority    bool   `json:"priority,omitempty"`
-	Favourite   bool   `json:"favourite,omitempty"`
-	Display     *File  `json:"display,omitempty"`
-	Thumb       *File  `json:"thumb,omitempty"`
-	Width       int    `json:"width"`
-	Height      int    `json:"height"`
+	// Uploader is the display name of the family member who sent the
+	// photo; UploaderAt is the server-side receipt time (RFC3339).
+	// Together they power the frame's arrival debut ("from Sarah") and
+	// its upload-time ordering (spec §10, living-presentation R7/R12).
+	// Additive within openframe-manifest/1: old frames ignore unknown
+	// fields, frames without them degrade to nameless debuts.
+	Uploader   string `json:"uploader,omitempty"`
+	UploaderAt string `json:"uploaded_at,omitempty"`
+	Priority   bool   `json:"priority,omitempty"`
+	Favourite  bool   `json:"favourite,omitempty"`
+	Display    *File  `json:"display,omitempty"`
+	Thumb      *File  `json:"thumb,omitempty"`
+	Width      int    `json:"width"`
+	Height     int    `json:"height"`
 }
 
 // Album is an assigned collection inside a manifest.
@@ -301,9 +309,10 @@ func loadPhotos(
 ) ([]Photo, error) {
 	rows, err := dbh.QueryContext(ctx,
 		`SELECT p.hash, p.original_name, p.caption, p.capture_date, p.width, p.height,
-		        p.priority, p.id
+		        p.priority, p.id, COALESCE(u.display_name, ''), p.created_at
 		   FROM photos p
 		   JOIN album_photos ap ON ap.photo_id = p.id
+		   LEFT JOIN users u ON u.id = p.uploaded_by
 		  WHERE ap.album_id = ? AND p.deleted_at IS NULL
 		  ORDER BY p.hash`, albumID)
 	if err != nil {
@@ -314,14 +323,19 @@ func loadPhotos(
 	var photos []Photo
 	for rows.Next() {
 		var (
-			p       Photo
-			capture sql.NullString
-			prio    int
-			photoID string
+			p          Photo
+			capture    sql.NullString
+			prio       int
+			photoID    string
+			uploader   sql.NullString
+			uploadedAt string
 		)
-		if err := rows.Scan(&p.Hash, &p.Name, &p.Caption, &capture, &p.Width, &p.Height, &prio, &photoID); err != nil {
+		if err := rows.Scan(&p.Hash, &p.Name, &p.Caption, &capture, &p.Width, &p.Height, &prio, &photoID, &uploader, &uploadedAt); err != nil {
 			return nil, err
 		}
+		p.CaptureDate = capture.String
+		p.Uploader = uploader.String
+		p.UploaderAt = uploadedAt
 		p.CaptureDate = capture.String
 		p.Priority = prio == 1 || albumPriority == 1
 		p.Favourite = favs[p.Hash]
