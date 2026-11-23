@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matthewgall/openframe/internal/config"
 	"github.com/matthewgall/openframe/internal/frame/canvas"
 	"github.com/matthewgall/openframe/internal/frame/sleep"
 	"github.com/matthewgall/openframe/internal/frame/thermal"
@@ -510,23 +511,31 @@ func (d *frameData) SetFavourite(ctx context.Context, hash string, value bool) e
 
 func (d *frameData) Info(ctx context.Context) ui.Info {
 	f := d.f
+	eff := f.effectiveConfig()
 	info := ui.Info{
 		DeviceName:      f.deviceName(ctx),
-		ServerURL:       f.effectiveConfig().Frame.ServerURL,
+		ServerURL:       eff.Frame.ServerURL,
 		ServerReachable: f.serverReachable(ctx),
 		LastSync:        f.lastSyncTime(ctx),
 		Version:         version.Version,
+	}
+	if v, ok := diskFree(eff); ok {
+		info.FreeBytes = v
 	}
 	info.Paired = f.engine != nil && f.engine.Paired()
 	return info
 }
 
 func (f *Frame) deviceName(ctx context.Context) string {
-	// M3 stores the server-assigned name in sync_state.
-	if v, err := f.stateValue(ctx, "sync", "device_name"); err == nil && v != "" {
+	// M3 stores the server-assigned name in the sync_state table (the
+	// sync engine's own key/value store). Table names here were
+	// silently wrong ("sync"/"agent") for the life of the feature:
+	// SQLite rejects them, the read fails, and every consumer fell
+	// back to defaults with no error surfaced.
+	if v, err := f.stateValue(ctx, "sync_state", "device_name"); err == nil && v != "" {
 		return v
 	}
-	if v, err := f.stateValue(ctx, "agent", StateKeyDeviceName); err == nil && v != "" {
+	if v, err := f.stateValue(ctx, "agent_state", StateKeyDeviceName); err == nil && v != "" {
 		return v
 	}
 	return "Frame"
@@ -548,7 +557,13 @@ func (f *Frame) serverReachable(ctx context.Context) bool {
 }
 
 func (f *Frame) lastSyncTime(ctx context.Context) *time.Time {
-	v, err := f.stateValue(ctx, "sync", "last_success")
+	if f.engine != nil {
+		if t, ok := f.engine.LastSync(ctx); ok {
+			return &t
+		}
+		return nil
+	}
+	v, err := f.stateValue(ctx, "sync_state", "last_success")
 	if err != nil || v == "" {
 		return nil
 	}
@@ -557,4 +572,15 @@ func (f *Frame) lastSyncTime(ctx context.Context) *time.Time {
 		return nil
 	}
 	return &t
+}
+
+// diskFree is the frame data partition's free space (the same statfs
+// the health reporter uses). ok=false when the path is unreadable.
+func diskFree(cfg config.Config) (int64, bool) {
+	_, frameDir, _ := cfg.Paths()
+	d, err := platform.Disk(frameDir)
+	if err != nil {
+		return 0, false
+	}
+	return d.FreeBytes, true
 }

@@ -554,7 +554,7 @@ func (e *Engine) renderSettings() {
 		{"Device", info.DeviceName, setInfo, 44},
 		{"Server", info.ServerURL + " (" + reach + ")", setInfo, 44},
 		{"Last sync", last, setInfo, 44},
-		{"Storage free", formatBytes(info.FreeBytes), setInfo, 44},
+		{"Storage free", storageFree(info.FreeBytes), setInfo, 44},
 		{"Version", info.Version, setInfo, 44},
 		{"", "", setGap, 60},
 		{"HOLD to apply", "", setApply, 72},
@@ -741,6 +741,16 @@ func formatBytes(b int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(b)/float64(div), "KMGTPE"[exp])
+}
+
+// storageFree renders the Storage info row. b <= 0 means the statfs
+// failed (or the volume is genuinely full); show a dash rather than
+// a confident "0 B".
+func storageFree(b int64) string {
+	if b <= 0 {
+		return "-"
+	}
+	return formatBytes(b)
 }
 
 func matchesChar(p Photo, ch rune) bool {
