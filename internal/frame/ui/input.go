@@ -362,7 +362,15 @@ func (e *Engine) advance(n int) {
 	}
 	prevImage := e.curImage
 	e.idx = (e.idx + n + len(e.list)*16) % len(e.list)
+	if n > 0 {
+		// Forward movement is the debut slot (plan F2: "next-slot
+		// debut", never a backward jump across the rotation).
+		if i := e.debutIndexLocked(); i >= 0 {
+			e.idx = i
+		}
+	}
 	e.curImage = e.fitPhoto(&e.list[e.idx], e.w, e.h)
+	e.syncDebutLocked()
 	e.render()
 	// Animate the photograph swap under the (already re-drawn)
 	// chrome; the final present restores the chrome.

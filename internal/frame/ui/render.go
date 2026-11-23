@@ -38,6 +38,13 @@ func (e *Engine) render() {
 	e.buttons = nil
 	e.cv.Fill(colBg)
 
+	// Leaving the slideshow spends any armed ribbon (the queue itself
+	// survives browsing excursions — debuts wait for the next advance
+	// after returning).
+	if e.screen != ScreenSlideshow {
+		e.ribbon = nil
+	}
+
 	switch e.screen {
 	case ScreenSlideshow:
 		e.renderSlideshow()

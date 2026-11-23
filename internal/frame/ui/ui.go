@@ -186,6 +186,10 @@ type Engine struct {
 	editErr   string
 	editShift bool
 
+	// arrival debuts (arrivals.go): queued hashes and the armed ribbon
+	debuts []string
+	ribbon *ribbon
+
 	// slideshow state
 	controls     bool
 	lastActivity time.Time
@@ -385,6 +389,20 @@ func (e *Engine) Tick(now time.Time) {
 	}
 	if e.statusMsg != "" && !now.Before(e.statusUntil) {
 		e.statusMsg = "" // pill reverts to its normal label
+		changed = true
+	}
+	// The ribbon owns its repaint: with Clock off there is otherwise
+	// no 1 Hz render driver, and an unheld ribbon would hang on
+	// screen past its deadline (design review P1). Held ribbons
+	// (controls up / asleep) freeze the countdown but still repaint
+	// so the reveal is intact when the hold ends.
+	if e.ribbon != nil {
+		if !e.ribbonHeld() {
+			e.ribbon.left -= ribbonSecond
+			if e.ribbon.left <= 0 {
+				e.ribbon = nil
+			}
+		}
 		changed = true
 	}
 	if e.screen != ScreenSlideshow && e.screen != ScreenSleep &&

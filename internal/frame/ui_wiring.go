@@ -144,6 +144,7 @@ func (f *Frame) buildDisplay(ctx context.Context) (*uiState, error) {
 		eng.Reload(ctx)
 		if len(arrivals) > 0 {
 			f.log.Info("photos arrived", "revision", revision, "count", len(arrivals))
+			eng.QueueArrivals(arrivals)
 		}
 		f.log.Info("display refreshed after activation", "revision", revision)
 	})
