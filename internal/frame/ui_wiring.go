@@ -360,6 +360,39 @@ func (f *Frame) sleepComponent(ctx context.Context) error {
 	}
 }
 
+// connectivityComponent keeps the clock's link glyph current: it
+// polls the kernel's interface state (cheap sysfs reads) and server
+// reachability (one HTTP probe) every 10 s and pushes the pair to
+// the engine. Reachability is polled here rather than in Info()
+// because Info() runs on the UI goroutine and a clock redraw must
+// not wait on a 2 s HTTP timeout.
+func (f *Frame) connectivityComponent(ctx context.Context) error {
+	if f.ui == nil {
+		return nil
+	}
+	syncLink := func() {
+		var ls ui.LinkState
+		switch platform.Connectivity() {
+		case platform.LinkWired:
+			ls = ui.LinkWired
+		case platform.LinkWiFi:
+			ls = ui.LinkWiFi
+		}
+		f.ui.eng.SetLink(ls, f.serverReachable(ctx))
+	}
+	syncLink()
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			syncLink()
+		}
+	}
+}
+
 // thermalComponent polls the temperature monitor and doubles the
 // slideshow interval above the threshold (spec §13).
 func (f *Frame) thermalComponent(ctx context.Context) error {

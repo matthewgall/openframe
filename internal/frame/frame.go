@@ -195,6 +195,7 @@ func (f *Frame) Run(ctx context.Context) error {
 		{Name: "touch", Run: f.touchComponent},
 		{Name: "sleep", Run: f.sleepComponent},
 		{Name: "thermal", Run: f.thermalComponent},
+		{Name: "connectivity", Run: f.connectivityComponent},
 	}
 	for _, c := range eng.Components() {
 		components = append(components, Component{Name: c.Name, Run: c.Run})

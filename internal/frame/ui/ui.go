@@ -192,6 +192,10 @@ type Engine struct {
 	// thermal throttle
 	throttled bool
 
+	// link glyph beside the clock
+	link     LinkState
+	linkOpen bool // server reachable
+
 	// M5 pairing: the code shown on this screen while the frame waits
 	// for admin approval ("" = no active challenge).
 	pairingCode string
@@ -232,6 +236,18 @@ type hitButton struct {
 	rect  [4]int // x0, y0, x1, y1
 	kind  int
 }
+
+// LinkState is the physical network attachment shown as a glyph
+// beside the clock. The frame polls platform.Connectivity and pushes
+// it here (with server reachability), because Info() performs an
+// HTTP probe and must not run at clock-redraw frequency.
+type LinkState int
+
+const (
+	LinkNone LinkState = iota
+	LinkWired
+	LinkWiFi
+)
 
 // Button kinds (semantic actions; labels are rendered text).
 const (
@@ -376,6 +392,18 @@ func (e *Engine) flashStatus(msg string, dur time.Duration) {
 
 // SetThrottled is called by the thermal monitor; the slideshow interval
 // doubles while true.
+// SetLink records the physical network attachment and server
+// reachability for the clock glyph. Idempotent by value.
+func (e *Engine) SetLink(state LinkState, reachable bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.link == state && e.linkOpen == reachable {
+		return
+	}
+	e.link, e.linkOpen = state, reachable
+	e.render()
+}
+
 func (e *Engine) SetThrottled(on bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()

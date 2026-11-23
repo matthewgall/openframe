@@ -118,10 +118,53 @@ func (e *Engine) drawClock() {
 	s := now.Format("15:04")
 	f := e.cv.Font(fontBody)
 	w := f.Width(s)
-	x := e.w - w - margin*2
+	iw := 40 // link glyph block, left of the time
+	x := e.w - iw - w - margin*2
 	y := margin
-	e.cv.FillRect(x-8, y-6, w+16, f.CellH()+12, color.NRGBA{R: 0, G: 0, B: 0, A: 140})
-	f.DrawText(e.cv.Image(), x, y, s, colText)
+	e.cv.FillRect(x-8, y-6, iw+w+16, f.CellH()+12, color.NRGBA{R: 0, G: 0, B: 0, A: 140})
+	e.drawLinkGlyph(x+6, y, iw-12, f.CellH())
+	f.DrawText(e.cv.Image(), x+iw, y, s, colText)
+}
+
+// drawLinkGlyph paints the connectivity mark in a box (bx, by, bw, bh).
+// Shape = physical medium; colour = server reachability; a dim dashed
+// dot = no link at all.
+func (e *Engine) drawLinkGlyph(bx, by, bw, bh int) {
+	cx := bx + bw/2
+	baseY := by + bh - 2
+	col := colText
+	switch e.link {
+	case LinkWiFi:
+		if !e.linkOpen {
+			col = color.NRGBA{R: 170, G: 170, B: 170, A: 200}
+		}
+		// three arc bands + dot: classic Wi-Fi mark, polygon-
+		// approximated arcs (canvas has no stroke).
+		for k := 1; k <= 3; k++ {
+			hw := 4*k + 2
+			apex := baseY - 5*k - 1
+			band := [][2]int{
+				{cx - hw, baseY - 2}, {cx, apex}, {cx + hw, baseY - 2},
+				{cx + hw - 3, baseY - 2}, {cx, apex + 4}, {cx - hw + 3, baseY - 2},
+			}
+			e.cv.Polygon(band, col)
+		}
+		e.cv.FillRect(cx-2, baseY-5, 4, 4, col)
+	case LinkWired:
+		if !e.linkOpen {
+			col = color.NRGBA{R: 170, G: 170, B: 170, A: 200}
+		}
+		// stylised RJ45: stem tab over a two-bar body.
+		e.cv.FillRect(cx-2, by+2, 4, 4, col)
+		e.cv.FillRect(cx-9, by+6, 18, 5, col)
+		e.cv.FillRect(cx-9, by+13, 18, 5, col)
+	default: // LinkNone: dashed dot, deliberately weak
+		dim := color.NRGBA{R: 170, G: 170, B: 170, A: 90}
+		e.cv.FillRect(cx-2, baseY-4, 4, 4, dim)
+		e.cv.Polygon([][2]int{
+			{cx - 5, baseY + 1}, {cx - 3, baseY + 1}, {cx + 5, baseY - 9}, {cx + 3, baseY - 9},
+		}, dim)
+	}
 }
 
 func (e *Engine) drawCaption(p *Photo) {
