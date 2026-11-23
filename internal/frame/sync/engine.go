@@ -459,7 +459,23 @@ func (e *Engine) Check(ctx context.Context) {
 // configuration has advanced. A config-only change does not bump the
 // content revision, but the manifest ETag covers config_revision too,
 // so the frame re-fetches and sees it.
+//
+// Renaming a frame is exactly such a config-only change: the device
+// name must be persisted HERE, not only when a new photo revision
+// stages. The old placement left sync_state.device_name stuck at
+// whatever it was when the last manifest staged (the name offered at
+// pairing), so Settings kept showing the stale device name forever.
 func (e *Engine) applyConfig(ctx context.Context, m *manifest) {
+	// Persist the device name unconditionally on every fetched
+	// manifest (idempotent write; unchanged values are a no-op upsert).
+	// It must run OUTSIDE the revision guard below: renames are
+	// config-only, frames may have stored a stale name under the old
+	// write-on-staging behaviour, and once a frame's stored
+	// config_revision catches up without the name (as it did during
+	// the guard-era bug), a guarded write would never repair it.
+	if m.Config.Name != "" {
+		e.setState(ctx, keyDeviceName, m.Config.Name)
+	}
 	last, _ := parseI64(e.getState(ctx, keyConfigRevision))
 	if m.ConfigRevision <= last {
 		return
@@ -591,12 +607,9 @@ func (e *Engine) stageManifest(ctx context.Context, body []byte) (*manifest, boo
 	if err := tx.Commit(); err != nil {
 		return nil, false, err
 	}
-	// Per-frame configuration (M3: device name for the M4 settings
-	// screen; M5 adds settings). Stored so the display can use it
-	// offline.
-	if m.Config.Name != "" {
-		e.setState(ctx, keyDeviceName, m.Config.Name)
-	}
+	// (Device-name persistence moved to applyConfig, which runs on
+	// every fetched manifest - it used to live here, which is why
+	// renames at an unchanged photo revision were never stored.)
 	e.log.Debug("collection staged",
 		"revision", m.Revision, "photos", photoCount, "queued", queued, "bytes", totalBytes)
 	return &m, true, nil

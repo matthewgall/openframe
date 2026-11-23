@@ -47,6 +47,11 @@ type fakeServer struct {
 	down      atomic.Bool // server is "down"
 	rangeReqs atomic.Int64
 
+	// per-frame configuration (the real server's ETag covers
+	// config_revision too, so a config-only change busts it).
+	cfgRev int64  // 0 => 1
+	name   string // "" => "Test Frame"
+
 	mu         sync.Mutex
 	servedHash map[string]bool // changes op_ids seen
 }
@@ -101,11 +106,19 @@ func (f *fakeServer) manifestJSON() []byte {
 		}
 		photos = append(photos, m)
 	}
+	cfgRev := f.cfgRev
+	if cfgRev == 0 {
+		cfgRev = 1
+	}
+	name := f.name
+	if name == "" {
+		name = "Test Frame"
+	}
 	doc := map[string]any{
 		"protocol":        "openframe-manifest/1",
 		"revision":        f.rev,
-		"config_revision": 1,
-		"config":          map[string]any{"name": "Test Frame"},
+		"config_revision": cfgRev,
+		"config":          map[string]any{"name": name},
 		"albums": []map[string]any{{
 			"id": "album-1", "name": "Album One", "photos": photos,
 		}},
@@ -121,7 +134,7 @@ func (f *fakeServer) handler() http.Handler {
 			http.Error(w, "down", http.StatusBadGateway)
 			return
 		}
-		etag := fmt.Sprintf("\"%d\"", f.rev)
+		etag := fmt.Sprintf("\"%d-%d\"", f.rev, f.cfgRev)
 		if inm := r.Header.Get("If-None-Match"); inm != "" && inm == etag {
 			w.WriteHeader(http.StatusNotModified)
 			return
@@ -709,4 +722,66 @@ func fileSHA(_, path string) string {
 		return ""
 	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// ---------------------------------------------------------------------
+// device-name persistence (config-only updates must not be missed)
+
+func storedDeviceName(t *testing.T, dbh *sql.DB) string {
+	t.Helper()
+	var v string
+	dbh.QueryRow("SELECT value FROM sync_state WHERE key = 'device_name'").Scan(&v)
+	return v
+}
+
+// A rename is a config-only change: the photo revision stays put.
+// The name write once lived only on the staging path, so renames
+// never landed and the settings screen kept showing whatever name
+// was current at the last content revision.
+func TestDeviceNamePersistsOnConfigOnlyUpdate(t *testing.T) {
+	ctx := context.Background()
+	p := newTestPhoto(strings.Repeat("e", 64))
+	e := newSyncEnv(t, p)
+	e.runSync(ctx)
+	if got := storedDeviceName(t, e.dbh); got != "Test Frame" {
+		t.Fatalf("device_name = %q after first sync, want Test Frame", got)
+	}
+
+	// Admin renames the frame; no photo changes.
+	e.fake.cfgRev = 2
+	e.fake.name = "Granny"
+	e.eng.Check(ctx)
+	e.eng.DownloadOnce(ctx)
+	if got := storedDeviceName(t, e.dbh); got != "Granny" {
+		t.Fatalf("device_name = %q after config-only rename, want Granny", got)
+	}
+	if rev := e.activeRevision(); rev != 1 {
+		t.Errorf("photo revision = %d, want 1 (rename must not re-stage photos)", rev)
+	}
+}
+
+// Self-heal for rows left stale by the old behaviour: the stored
+// config_revision already matches (so applyConfig's guard returns
+// early) but the stored name drifted. The drift check runs BEFORE
+// the guard, so the very next manifest that is fetched repairs it.
+func TestDeviceNameSelfHealsOnDrift(t *testing.T) {
+	ctx := context.Background()
+	p := newTestPhoto(strings.Repeat("f", 64))
+	e := newSyncEnv(t, p)
+	e.runSync(ctx)
+
+	// Simulate legacy state: name stale while the revision counter
+	// is already current.
+	if _, err := e.dbh.Exec("UPDATE sync_state SET value = 'Living room' WHERE key = 'device_name'"); err != nil {
+		t.Fatal(err)
+	}
+	// Bump the PHOTO revision (forces a fetch; config revision stays
+	// at the processed value so only the drift path can repair).
+	e.fake.rev = 2
+	e.fake.photos[0] = newTestPhoto(strings.Repeat("7", 64))
+	e.eng.Check(ctx)
+	e.eng.DownloadOnce(ctx)
+	if got := storedDeviceName(t, e.dbh); got != "Test Frame" {
+		t.Fatalf("device_name = %q after drift, want self-heal to Test Frame", got)
+	}
 }
