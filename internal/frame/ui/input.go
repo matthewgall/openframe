@@ -7,6 +7,8 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/matthewgall/openframe/internal/frame/canvas"
+	"github.com/matthewgall/openframe/internal/frame/display"
 	"github.com/matthewgall/openframe/internal/frame/touch"
 )
 
@@ -442,16 +444,53 @@ func (e *Engine) startTransition(old, new *image.NRGBA) {
 		e.presentFull(new)
 		return
 	}
-	steps := int(e.cfg.TransitionDuration / (1000 / 30 * time.Millisecond))
-	if steps < 1 {
-		steps = 1
+	// Progress is wall-clock based, not step-counted: when frames are
+	// too expensive to hit 30 fps the transition still ends on time
+	// (dropping frames) instead of stretching. Drivers implementing
+	// display.TransitionDriver get the fused single-pass path; the
+	// rest (headless, dev) take compose-to-canvas + present. For
+	// crossfades the fused path additionally runs on half-resolution
+	// copies (one-time box filter): the HVS upscales, and the dissolve
+	// hides the sampling. If the driver lacks the half path the first
+	// error re-arms the loop with full-size images once.
+	start := e.cfg.Now()
+	dur := e.cfg.TransitionDuration
+	fused, isTD := e.drv.(display.TransitionDriver)
+	tb, tt := old, new
+	halfPending := isTD && mode == "crossfade"
+	if halfPending {
+		tb, tt = canvas.DownsampleHalf(old), canvas.DownsampleHalf(new)
 	}
-	step := time.NewTicker(1000 / 30 * time.Millisecond)
+	step := time.NewTicker(time.Second / 30)
 	defer step.Stop()
-	for i := 1; i <= steps; i++ {
-		t := float64(i) / float64(steps)
-		e.composeTransition(old, new, t)
-		e.present()
+	for {
+		elapsed := e.cfg.Now().Sub(start)
+		if elapsed >= dur {
+			break
+		}
+		t := float64(elapsed) / float64(dur)
+		if isTD {
+			if err := fused.PresentTransition(context.Background(), tb, tt, mode, t); err != nil {
+				if halfPending {
+					halfPending = false
+					tb, tt = old, new
+					if err := fused.PresentTransition(context.Background(), tb, tt, mode, t); err != nil {
+						e.lastPresentErr = err.Error()
+						e.composeTransition(old, new, t)
+						e.present()
+					}
+				} else {
+					e.lastPresentErr = err.Error()
+					e.composeTransition(old, new, t)
+					e.present()
+				}
+			} else {
+				e.lastPresentErr = ""
+			}
+		} else {
+			e.composeTransition(old, new, t)
+			e.present()
+		}
 		select {
 		case g := <-e.in:
 			e.lastActivity = g.T

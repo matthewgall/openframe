@@ -114,6 +114,46 @@ func solidColorImage(w, h int, col color.NRGBA) *image.NRGBA {
 	return img
 }
 
+func TestDownsampleHalf(t *testing.T) {
+	src := image.NewNRGBA(image.Rect(0, 0, 4, 2))
+	for i := range src.Pix {
+		src.Pix[i] = 0
+	}
+	// Block (0,0): R=100/200/200/100 -> 150; block (1,0): all 40 -> 40.
+	set := func(x, y int, c color.NRGBA) { src.SetNRGBA(x, y, c) }
+	set(0, 0, color.NRGBA{R: 100, G: 40, B: 40, A: 255})
+	set(1, 0, color.NRGBA{R: 200, G: 40, B: 40, A: 255})
+	set(0, 1, color.NRGBA{R: 200, G: 40, B: 40, A: 255})
+	set(1, 1, color.NRGBA{R: 100, G: 40, B: 40, A: 255})
+	for x := 2; x < 4; x++ {
+		for y := 0; y < 2; y++ {
+			set(x, y, color.NRGBA{R: 40, G: 40, B: 40, A: 255})
+		}
+	}
+	dst := DownsampleHalf(src)
+	if dst.Bounds() != (image.Rect(0, 0, 2, 1)) {
+		t.Fatalf("bounds = %v, want 2x1", dst.Bounds())
+	}
+	if p := dst.At(0, 0).(color.NRGBA); p.R != 150 {
+		t.Errorf("block0 R = %d, want 150", p.R)
+	}
+	if p := dst.At(1, 0).(color.NRGBA); p.R != 40 {
+		t.Errorf("block1 R = %d, want 40", p.R)
+	}
+}
+
+func BenchmarkDownsampleHalf(b *testing.B) {
+	src := image.NewNRGBA(image.Rect(0, 0, 1920, 1200))
+	for i := range src.Pix {
+		src.Pix[i] = byte(i)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		_ = DownsampleHalf(src)
+	}
+}
+
 func TestFitContainLetterboxes(t *testing.T) {
 	c := New(10, 10)
 	// 20x10 source into 10x10: scale 0.5 -> 10x5, centred vertically.

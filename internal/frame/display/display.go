@@ -81,6 +81,21 @@ type Driver interface {
 	SetRotation(ctx context.Context, degrees int) error
 }
 
+// TransitionDriver is an optional extension for drivers that can
+// composite the slideshow transitions (crossfade / slide) directly
+// into scanout memory. On the target hardware a transition frame is
+// bandwidth-limited: blending to the UI canvas and then converting
+// it to the dumb buffer reads and writes ~27 MB twice per frame, for
+// a canvas nobody looks at (chrome is absent mid-transition by
+// design). A fused blend+convert halves that traffic.
+//
+// base and top are fitted images at the driver's resolution; mode is
+// "crossfade" or "slide"; t is progress in (0,1). Drivers that do not
+// implement this interface take the generic compose-to-canvas path.
+type TransitionDriver interface {
+	PresentTransition(ctx context.Context, base, top *image.NRGBA, mode string, t float64) error
+}
+
 // ErrUnsupportedDriver is returned by New when a driver name is not
 // available in this release.
 var ErrUnsupportedDriver = fmt.Errorf("display driver not available in this release")

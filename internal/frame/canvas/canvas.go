@@ -11,6 +11,8 @@ import (
 	"sync"
 
 	xdraw "golang.org/x/image/draw"
+
+	"github.com/matthewgall/openframe/internal/frame/imgutil"
 )
 
 // FitMode selects how a photograph is mapped to the screen.
@@ -283,9 +285,24 @@ func BlendCrossfade(dst, base, top *image.NRGBA, t float64) {
 	bb := base.Pix
 	tb := top.Pix
 	n := len(db)
-	for i := 0; i < n; i++ {
-		db[i] = uint8(float64(bb[i])*(1-t) + float64(tb[i])*t)
+	// Fixed-point 8.0 weights: the float64-per-byte loop cost 225 ms
+	// per frame on a Pi 3 at 1920x1200 - 7x the 30 fps budget.
+	// Integer math plus all four cores lands near 15 ms.
+	// Rounding (+128) keeps the result within 1 of the float version.
+	p := uint32(t*256 + 0.5)
+	if p == 0 {
+		p = 1
 	}
+	if p > 255 {
+		p = 255
+	}
+	const q = uint32(256)
+	ip := q - p
+	imgutil.Chunked(n, func(lo, hi int) {
+		for i := lo; i < hi; i++ {
+			db[i] = uint8((uint32(bb[i])*ip + uint32(tb[i])*p + 128) >> 8)
+		}
+	})
 }
 
 // SlideFrame composites a horizontal slide: base exits toward
@@ -302,16 +319,102 @@ func SlideFrame(dst, base, top *image.NRGBA, t float64) {
 	}
 	w := dst.Rect.Dx()
 	off := int(float64(w) * t)
-	// Black background, then both images offset. In draw.Draw the
-	// source point sp maps to dst's origin, so sp=(off,0) shifts the
-	// image LEFT and sp=(-off,0) shifts it RIGHT.
-	draw.Draw(dst, dst.Rect, image.NewUniform(color.NRGBA{}), image.Point{}, draw.Src)
-	// base exits toward the left: it keeps its left-aligned band
-	// [0, w-off) and its right side slides off the screen.
-	draw.Draw(dst, dst.Rect, base, image.Pt(off, 0), draw.Over)
-	// top enters from the right: it occupies the right-aligned band
-	// [off, w) and grows from the right edge.
-	draw.Draw(dst, dst.Rect, top, image.Pt(-off, 0), draw.Over)
+	db, bb, tp := dst.Pix, base.Pix, top.Pix
+	dp, bs, ts := dst.Stride, base.Stride, top.Stride
+	// Single pass per row, all cores, same geometry as draw.Draw:
+	//   base is visible at dst x for x < w-off (reading src x+off)
+	//   top  is visible at dst x for x >= off  (reading src x-off)
+	//   draw.Over onto a transparent-black fill yields the source
+	//   bytes, so base-only and top-only bands are pure copies; the
+	//   [off, w-off) overlap and the [w-off, off) gap (when off >
+	//   w-off) each get their own segment. Sub-opaque pixels in the
+	//   overlap fall back to exact NRGBA-over math (rare: frame
+	//   photos are server-derived JPEGs).
+	overlapLo, overlapHi := off, w-off // empty unless off < w-off
+	gapLo, gapHi := w-off, off         // empty unless w-off < off
+	baseOnly := overlapLo
+	if overlapHi < baseOnly {
+		baseOnly = overlapHi
+	}
+	topStart := gapHi
+	if overlapHi > topStart {
+		topStart = overlapHi
+	}
+	imgutil.Chunked(dst.Rect.Dy(), func(y0, y1 int) {
+		for y := y0; y < y1; y++ {
+			drow := db[y*dp:]
+			brow := bb[y*bs:]
+			trow := tp[y*ts:]
+			copy(drow[0:baseOnly*4], brow[off*4:(off+baseOnly)*4])
+			for x := overlapLo; x < overlapHi; x++ {
+				di, bi, ti := x*4, (x+off)*4, (x-off)*4
+				ta := trow[ti+3]
+				switch {
+				case ta == 255: // over opaque wins outright
+					drow[di] = trow[ti]
+					drow[di+1] = trow[ti+1]
+					drow[di+2] = trow[ti+2]
+					drow[di+3] = 255
+				case ta == 0:
+					drow[di] = brow[bi]
+					drow[di+1] = brow[bi+1]
+					drow[di+2] = brow[bi+2]
+					drow[di+3] = brow[bi+3]
+				default:
+					at, ab := float64(ta)/255, float64(brow[bi+3])/255
+					oa := at + ab*(1-at)
+					if oa == 0 {
+						drow[di], drow[di+1], drow[di+2], drow[di+3] = 0, 0, 0, 0
+						continue
+					}
+					for c := 0; c < 3; c++ {
+						num := float64(trow[ti+c])*at + float64(brow[bi+c])*ab*(1-at)
+						drow[di+c] = uint8(num/oa + 0.5)
+					}
+					drow[di+3] = uint8(oa*255 + 0.5)
+				}
+			}
+			for x := gapLo; x < gapHi; x++ {
+				di := x * 4
+				drow[di], drow[di+1], drow[di+2], drow[di+3] = 0, 0, 0, 0
+			}
+			copy(drow[topStart*4:w*4], trow[(topStart-off)*4:(w-off)*4])
+		}
+	})
+}
+
+// DownsampleHalf box-filters src to exactly half its dimensions
+// (integer truncate), averaging 2x2 pixel blocks per channel. The
+// crossfade transition uses it once per side: blending at half
+// resolution and letting the HVS upscale on scanout cuts the per-
+// frame memory traffic ~4x, which is the Pi 3's real ceiling. The
+// dissolve hides the sampling; endpoint stills stay full resolution.
+func DownsampleHalf(src *image.NRGBA) *image.NRGBA {
+	sb := src.Bounds()
+	w2, h2 := sb.Dx()/2, sb.Dy()/2
+	if w2 < 1 || h2 < 1 {
+		return src
+	}
+	dst := image.NewNRGBA(image.Rect(0, 0, w2, h2))
+	sp := src.Pix
+	dp := dst.Pix
+	stride := src.Stride
+	imgutil.Chunked(h2, func(y0, y1 int) {
+		for y := y0; y < y1; y++ {
+			sy := y * 2
+			row := sp[sy*stride:]
+			row2 := sp[(sy+1)*stride:]
+			for x := 0; x < w2; x++ {
+				sx2 := x * 2 * 4
+				d := (y*w2 + x) * 4
+				for c := 0; c < 4; c++ {
+					dp[d+c] = uint8((uint32(row[sx2+c]) + uint32(row[sx2+4+c]) +
+						uint32(row2[sx2+c]) + uint32(row2[sx2+4+c]) + 2) / 4)
+				}
+			}
+		}
+	})
+	return dst
 }
 
 // SnapshotPNG writes an atomic PNG of the current framebuffer.
