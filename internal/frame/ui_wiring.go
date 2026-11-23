@@ -549,11 +549,28 @@ func (d *frameData) Info(ctx context.Context) ui.Info {
 		DeviceName:      f.deviceName(ctx),
 		ServerURL:       eff.Frame.ServerURL,
 		ServerReachable: f.serverReachable(ctx),
-		LastSync:        f.lastSyncTime(ctx),
 		Version:         version.Version,
 	}
-	if v, ok := diskFree(eff); ok {
-		info.FreeBytes = v
+	// "Last sync" means "last successful manifest check" - the same
+	// event the admin UI reports (health.last_sync_at comes from
+	// LastAttempt). It used to show keyLastSuccess (collection
+	// ACTIVATION), which stays days old on a healthy, unchanged
+	// library and made a perfectly synced frame look stale - and
+	// LastSyncError was never populated, leaving the slideshow's
+	// "Last sync error" line dead code.
+	if f.engine != nil {
+		if t, ok := f.engine.LastAttempt(ctx); ok {
+			tt := t
+			info.LastSync = &tt
+			info.LastSyncError = f.engine.LastError(ctx)
+		}
+		if v, ok := diskFree(eff); ok {
+			info.FreeBytes = v
+		}
+	} else {
+		// Headless/test path without a sync engine: fall back to the
+		// stored activation timestamp (previous behaviour).
+		info.LastSync = f.lastSyncTime(ctx)
 	}
 	info.Paired = f.engine != nil && f.engine.Paired()
 	return info

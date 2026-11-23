@@ -624,7 +624,10 @@ func (e *Engine) renderSettings() {
 	}
 	last := "never"
 	if info.LastSync != nil {
-		last = info.LastSync.Format("2006-01-02 15:04")
+		// Render in the frame's local time (the stored value is UTC;
+		// the admin UI renders the viewer's local time - matching
+		// "Nov 23 17:24" on both sides avoids "two clocks" confusion).
+		last = info.LastSync.In(time.Local).Format("2006-01-02 15:04")
 	}
 	items := []settingsItem{
 		{"Brightness", fmt.Sprintf("%d%%", int(e.staged.Brightness*100)), setSetting, rowHeight},
