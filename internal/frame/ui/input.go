@@ -99,6 +99,10 @@ func (e *Engine) onSwipe(dir touch.Dir) {
 		}
 		e.clampSearch()
 		e.render()
+	case ScreenEdit:
+		// Any swipe closes the editor overlay (discard) and returns
+		// to the settings list.
+		e.closeEditorDiscard()
 	case ScreenSettings:
 		switch dir {
 		case touch.DirUp:
@@ -165,14 +169,20 @@ func (e *Engine) onDoubleTap() {
 
 func (e *Engine) onHold(pos [2]int) {
 	// Hold is the confirm gesture (spec §10: "administrative actions
-	// must be protected against accidental activation").
+	// must be protected against accidental activation") and, on
+	// settings rows, the "type a value instead of cycling presets"
+	// gesture.
 	for i := range e.buttons {
 		b := &e.buttons[i]
-		if b.kind != btnApply {
+		if pos[0] < b.rect[0] || pos[0] >= b.rect[2] || pos[1] < b.rect[1] || pos[1] >= b.rect[3] {
 			continue
 		}
-		if pos[0] >= b.rect[0] && pos[0] < b.rect[2] && pos[1] >= b.rect[1] && pos[1] < b.rect[3] {
+		switch {
+		case b.kind == btnApply:
 			e.applySettings()
+			return
+		case b.kind >= btnSetting && b.kind < btnSetting+9 && editableSetting(b.kind-btnSetting):
+			e.openSettingEditor(b.kind - btnSetting)
 			return
 		}
 	}
@@ -239,6 +249,20 @@ func (e *Engine) doButton(kind int, b hitButton) {
 		default:
 			e.goGallery()
 		}
+	case btnScrollUp:
+		page := e.settingsVisible - 1
+		if page < 1 {
+			page = 1
+		}
+		e.settingsTop -= page
+		e.render()
+	case btnScrollDown:
+		page := e.settingsVisible - 1
+		if page < 1 {
+			page = 1
+		}
+		e.settingsTop += page
+		e.render()
 	case btnApply:
 		// A plain tap on "apply" does nothing by design: the
 		// protection is the hold. Say so on the pill.
@@ -267,17 +291,41 @@ func (e *Engine) doButton(kind int, b hitButton) {
 		e.goWifiList(1)
 	case btnKey:
 		ch := rune(b.label[0])
+		if e.screen == ScreenEdit {
+			if e.editShift {
+				ch = unicode.ToUpper(ch)
+			}
+			e.editKeyPress(ch)
+			return
+		}
 		if e.wifiShift {
 			ch = unicode.ToUpper(ch)
 		}
 		e.keyPress(ch)
 	case btnKeyShift:
+		if e.screen == ScreenEdit {
+			e.editShift = !e.editShift
+			e.render()
+			return
+		}
 		e.toggleShift()
 	case btnKeyBack:
+		if e.screen == ScreenEdit {
+			e.editBackspace()
+			return
+		}
 		e.keyBackspace()
+	case btnCancelEdit:
+		if e.screen == ScreenEdit {
+			e.closeEditorDiscard()
+		}
 	case btnKeyShow:
 		e.toggleShow()
 	case btnKeyDone:
+		if e.screen == ScreenEdit {
+			e.commitEditor()
+			return
+		}
 		e.keyDone()
 	case browsePhoto:
 		e.openPhotoByHash(b.label)

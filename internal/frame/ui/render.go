@@ -51,6 +51,9 @@ func (e *Engine) render() {
 		e.renderSearch()
 	case ScreenSettings:
 		e.renderSettings()
+	case ScreenEdit:
+		e.renderSettings()
+		e.renderEditorOverlay()
 	case ScreenWifiList:
 		e.renderWifiList()
 	case ScreenWifiText:
@@ -60,6 +63,46 @@ func (e *Engine) render() {
 		// backlight (spec §11).
 	}
 	e.present()
+}
+
+// renderEditorOverlay dims the settings list, hands hit-testing to
+// the keyboard, and shows the typed value + validation state.
+func (e *Engine) renderEditorOverlay() {
+	e.cv.FillRect(0, 0, e.w, e.h, color.NRGBA{R: 0, G: 0, B: 0, A: 210})
+	// The list behind is decorative now: the overlay owns input.
+	e.buttons = nil
+
+	f := e.cv.Font(fontBody)
+	name := editorSettingNames[e.editIdx]
+	e.cv.Font(fontTitle).DrawText(e.cv.Image(), margin, margin, truncate(name, 30), colText)
+	cur := "current: " + e.currentSettingValue(e.editIdx)
+	e.cv.Font(fontBody).DrawText(e.cv.Image(), margin, margin+56, cur, colDim)
+
+	rowW := e.w - 2*margin
+	y := margin*2 + 96
+	fieldH := 64
+	e.cv.FillRect(margin, y, rowW, fieldH, color.NRGBA{R: 255, G: 255, B: 255, A: 14})
+	shown := e.editBuf
+	maxRunes := (rowW - 32) / f.CellW()
+	if r := runesOf(shown); len(r) > maxRunes {
+		shown = string(r[len(r)-maxRunes:])
+	}
+	e.cv.Font(fontBody).DrawText(e.cv.Image(), margin+16, y+(fieldH-f.CellH())/2, shown, colText)
+	if e.editErr != "" {
+		e.cv.Font(fontBody).DrawText(e.cv.Image(), margin, y+fieldH+6, e.editErr, colAccent)
+	}
+	y += fieldH + 24
+
+	// The editor's third action cell is ":" (times are the main
+	// typed input); the Wi-Fi flow uses that slot for Show/Hide.
+	e.drawKeyboard(y, e.editShift, []kbAction{
+		{" ", "Space", btnKey},
+		{"shift", "Shift", btnKeyShift},
+		{":", ":", btnKey},
+		{"<", "<", btnKeyBack},
+		{"cancel", "Cancel", btnCancelEdit},
+		{"Done", "Done", btnKeyDone},
+	})
 }
 
 // fitPhoto decodes + fits a photograph to the full canvas (or nil on
@@ -629,8 +672,44 @@ func (e *Engine) renderSettings() {
 	if e.settingsTop > maxTop {
 		e.settingsTop = maxTop
 	}
+	e.settingsVisible, e.settingsMaxTop = visible, maxTop
 	if maxTop > 0 {
-		e.cv.Font(fontBody).DrawText(e.cv.Image(), e.w-margin-160, margin+16, "swipe: scroll", colDim)
+		e.cv.Font(fontBody).DrawText(e.cv.Image(), e.w-margin-300, margin+16, "swipe scroll | hold row to type", colDim)
+
+		// Scrollbar: right-edge track with a proportional thumb, so
+		// "there is more to see" is obvious without swiping first.
+		trackX := e.w - 22
+		thumb := avail * visible / len(items)
+		if thumb < 40 {
+			thumb = 40
+		}
+		e.cv.FillRect(trackX, y0, 8, avail, color.NRGBA{R: 255, G: 255, B: 255, A: 26})
+		thumbY := y0 + (avail-thumb)*e.settingsTop/maxTop
+		e.cv.FillRect(trackX, thumbY, 8, thumb, color.NRGBA{R: 255, G: 196, B: 0, A: 200})
+
+		// Fixed page arrows at the right edge, top and bottom of the
+		// list. The disabled direction is dimmed and not
+		// hit-registered. The bottom arrow sits above the apply
+		// block's row band only when scrolled to the end; the apply
+		// pill is centred, so no zone overlap matters.
+		aw, ah := 40, 40
+		ax := trackX - 4 - aw
+		upY := y0
+		downY := y0 + avail - ah
+		colA := color.NRGBA{R: 255, G: 255, B: 255, A: 140}
+		if e.settingsTop > 0 {
+			e.buttons = append(e.buttons, hitButton{label: "", rect: [4]int{ax, upY, ax + aw, upY + ah}, kind: btnScrollUp})
+			e.cv.Polygon([][2]int{{ax + 20, upY + 8}, {ax + 6, upY + 30}, {ax + 34, upY + 30}}, colA)
+		} else {
+			e.cv.Polygon([][2]int{{ax + 20, upY + 8}, {ax + 6, upY + 30}, {ax + 34, upY + 30}}, color.NRGBA{R: 255, G: 255, B: 255, A: 40})
+		}
+		colB := color.NRGBA{R: 255, G: 255, B: 255, A: 140}
+		if e.settingsTop < maxTop {
+			e.buttons = append(e.buttons, hitButton{label: "", rect: [4]int{ax, downY, ax + aw, downY + ah}, kind: btnScrollDown})
+			e.cv.Polygon([][2]int{{ax + 6, downY + 10}, {ax + 34, downY + 10}, {ax + 20, downY + 32}}, colB)
+		} else {
+			e.cv.Polygon([][2]int{{ax + 6, downY + 10}, {ax + 34, downY + 10}, {ax + 20, downY + 32}}, color.NRGBA{R: 255, G: 255, B: 255, A: 40})
+		}
 	}
 
 	rowW := e.w - 2*margin
@@ -903,15 +982,46 @@ func (e *Engine) renderWifiText() {
 	e.cv.Font(fontBody).DrawText(e.cv.Image(), margin+16, y+(fieldH-f.CellH())/2, shown, colText)
 	y += fieldH + 24
 
-	// Keyboard: three letter rows + an action row.
+	showLabel := ""
+	if e.wifiPsk {
+		showLabel = "show"
+	}
+	y = e.drawKeyboard(y, e.wifiShift, []kbAction{
+		{" ", "Space", btnKey},
+		{"shift", "Shift", btnKeyShift},
+		{showLabel, "Show", btnKeyShow},
+		{"<", "<", btnKeyBack},
+		{"Done", "Done", btnKeyDone},
+	})
+	if e.wifiMsg != "" {
+		e.cv.Font(fontBody).DrawText(e.cv.Image(), margin, y+18, truncate(e.wifiMsg, 80), colAccent)
+	}
+}
+
+// kbAction is one cell of the keyboard's bottom row.
+type kbAction struct {
+	label string // the value doButton sees (" " = space key; "" = inert cell)
+	text  string
+	kind  int
+}
+
+// drawKeyboard renders the OSD keyboard (digit row + three letter
+// rows + a five-cell action row) starting at y and returns the y
+// below it. Shared by the Wi-Fi entry screens and the settings value
+// editor; the shift light is passed in so each flow keeps its own
+// state. Keys register as btnKey with the lowercase/base rune as
+// label, exactly as before.
+func (e *Engine) drawKeyboard(y int, shift bool, actions []kbAction) int {
+	rowW := e.w - 2*margin
+	f := e.cv.Font(fontBody)
 	const gap = 6
 	cellW := (rowW - 9*gap) / 10
-	rowH := 56
-	for _, letters := range []string{"qwertyuiop", "asdfghjkl", "zxcvbnm"} {
+	const rowH = 56
+	for _, letters := range []string{"1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm"} {
 		for i := 0; i < len(letters); i++ {
 			ch := rune(letters[i])
 			shown := string(ch)
-			if e.wifiShift {
+			if shift && ch >= 'a' {
 				shown = strings.ToUpper(shown)
 			}
 			x := margin + i*(cellW+gap)
@@ -921,31 +1031,24 @@ func (e *Engine) renderWifiText() {
 		}
 		y += rowH + gap
 	}
-	// Action row: Space / Show-Hide / Backspace / Done.
-	cellW2 := (rowW - 4*gap) / 5
-	acts := []struct {
-		label string // the value doButton sees (" " = space key)
-		text  string
-		kind  int
-	}{
-		{" ", "Space", btnKey},
-		{"shift", "Shift", btnKeyShift},
-		{"show", "Show", btnKeyShow},
-		{"<", "<", btnKeyBack},
-		{"Done", "Done", btnKeyDone},
-	}
-	for i, a := range acts {
+	cellW2 := (rowW - (len(actions)-1)*gap) / len(actions)
+	for i, a := range actions {
 		x := margin + i*(cellW2+gap)
-		if (a.kind == btnKeyShow) && !e.wifiPsk {
-			// No Show/Hide on the SSID entry: inert cell.
+		if a.kind == btnKeyShow && a.label == "" {
+			// Inert cell (SSID entry has no Show/Hide; the settings
+			// editor has no passphrase to mask).
 			e.cv.FillRect(x, y, cellW2, rowH, color.NRGBA{R: 255, G: 255, B: 255, A: 12})
 			continue
 		}
+		text := a.text
 		if a.kind == btnKeyShift {
-			a.text = "Shift"
-			if e.wifiShift {
-				a.text = "Unshift"
+			text = "Shift"
+			if shift {
+				text = "Unshift"
 			}
+		}
+		if a.kind == btnCancelEdit {
+			text = "Cancel"
 		}
 		bg := color.NRGBA{R: 255, G: 255, B: 255, A: 26}
 		col := colText
@@ -953,10 +1056,8 @@ func (e *Engine) renderWifiText() {
 			bg, col = color.NRGBA{R: 255, G: 196, B: 0, A: 46}, colAccent
 		}
 		e.cv.FillRect(x, y, cellW2, rowH, bg)
-		e.cv.Font(fontBody).DrawText(e.cv.Image(), x+(cellW2-f.Width(a.text))/2, y+(rowH-f.CellH())/2, a.text, col)
+		e.cv.Font(fontBody).DrawText(e.cv.Image(), x+(cellW2-f.Width(text))/2, y+(rowH-f.CellH())/2, text, col)
 		e.buttons = append(e.buttons, hitButton{label: a.label, rect: [4]int{x, y, x + cellW2, y + rowH}, kind: a.kind})
 	}
-	if e.wifiMsg != "" {
-		e.cv.Font(fontBody).DrawText(e.cv.Image(), margin, y+rowH+12, truncate(e.wifiMsg, 80), colAccent)
-	}
+	return y + rowH
 }

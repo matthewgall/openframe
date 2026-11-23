@@ -44,6 +44,7 @@ const (
 	ScreenSettings
 	ScreenWifiList
 	ScreenWifiText
+	ScreenEdit
 	ScreenSleep
 )
 
@@ -65,6 +66,8 @@ func (s Screen) String() string {
 		return "wifi-list"
 	case ScreenWifiText:
 		return "wifi-text"
+	case ScreenEdit:
+		return "edit"
 	case ScreenSleep:
 		return "sleep"
 	}
@@ -168,8 +171,20 @@ type Engine struct {
 	albumTop    int
 	searchTop   int
 	settingsTop int // first visible item on the (scrollable) settings screen
-	sortByName  bool
-	filterChar  rune // 0 = no filter
+	// cached viewport from the last renderSettings, used by the
+	// scrollbar arrow buttons (one page = visible-1 rows).
+	settingsVisible int
+	settingsMaxTop  int
+	sortByName      bool
+	filterChar      rune // 0 = no filter
+
+	// settings value editor (hold an editable row): OSD keyboard
+	// overlay editing one staged value as text; validation errors
+	// display in the overlay without losing input.
+	editIdx   int
+	editBuf   string
+	editErr   string
+	editShift bool
 
 	// slideshow state
 	controls     bool
@@ -274,6 +289,9 @@ const (
 	btnKeyBack    // backspace
 	btnKeyShow    // show/hide passphrase
 	btnKeyDone    // commit the text
+	btnCancelEdit // discard the settings editor overlay
+	btnScrollUp   // settings list page up
+	btnScrollDown // settings list page down
 	btnSetting    // followed by a setting index (btnSetting + 0..8);
 	// MUST stay last: doButton range-checks btnSetting..btnSetting+8.
 )

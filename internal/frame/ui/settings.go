@@ -1,6 +1,9 @@
 package ui
 
 import (
+	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/matthewgall/openframe/internal/frame/canvas"
@@ -49,6 +52,185 @@ func SettingsFromConfig(c *Config) Settings {
 // config — are visible).
 func (e *Engine) effectiveSettings() Settings {
 	return SettingsFromConfig(e.cfg)
+}
+
+// --- value editor (hold an editable settings row) -----------------
+//
+// Tapping a row cycles presets - great for "45s", painful for
+// "07:03". Holding a row opens the OSD keyboard overlay (same
+// keyboard the Wi-Fi flow uses) so any value can be typed exactly.
+// The overlay parses + validates on Done and keeps the typed text on
+// failure; Cancel/swipe leave the staged value untouched. Changes
+// still only persist through the usual HOLD-to-apply.
+
+// editorSettingNames maps the editable row indices (as numbered by
+// settingIndex) to their parse targets.
+var editorSettingNames = map[int]string{
+	0: "Brightness",
+	1: "Slideshow interval",
+	2: "Transition",
+	3: "Orientation",
+	4: "Sleep on",
+	5: "Sleep off",
+}
+
+func editableSetting(idx int) bool {
+	_, ok := editorSettingNames[idx]
+	return ok
+}
+
+// openSettingEditor puts row idx into the overlay with an empty
+// buffer (the current value is shown as "current:").
+func (e *Engine) openSettingEditor(idx int) {
+	if !editableSetting(idx) {
+		return
+	}
+	e.editIdx, e.editBuf, e.editErr, e.editShift = idx, "", "", false
+	e.screen = ScreenEdit
+	e.render()
+}
+
+// currentSettingValue renders the staged value of the edited row
+// identically to the settings list, so "current" reads exactly like
+// the row the user held.
+func (e *Engine) currentSettingValue(idx int) string {
+	switch idx {
+	case 0:
+		return fmt.Sprintf("%d%%", int(e.staged.Brightness*100))
+	case 1:
+		return formatDuration(e.staged.SlideshowInterval)
+	case 2:
+		return e.staged.Transition
+	case 3:
+		return fmt.Sprintf("%d\u00b0", e.staged.Orientation)
+	case 4:
+		return minutesToHM(e.staged.SleepOn)
+	case 5:
+		return minutesToHM(e.staged.SleepOff)
+	}
+	return ""
+}
+
+// editKeyPress appends one keyboard rune to the editor buffer (cap
+// 32 chars is far beyond any valid value).
+func (e *Engine) editKeyPress(r rune) {
+	if len(runesOf(e.editBuf)) >= 32 {
+		return
+	}
+	e.editBuf += string(r)
+	e.editErr = ""
+	e.render()
+}
+
+func (e *Engine) editBackspace() {
+	r := runesOf(e.editBuf)
+	if len(r) > 0 {
+		e.editBuf = string(r[:len(r)-1])
+	}
+	e.editErr = ""
+	e.render()
+}
+
+func (e *Engine) closeEditorDiscard() {
+	e.screen = ScreenSettings
+	e.editBuf, e.editErr = "", ""
+	e.render()
+}
+
+// commitEditor parses the buffer into the staged settings.
+func (e *Engine) commitEditor() {
+	val := strings.TrimSpace(e.editBuf)
+	if val == "" {
+		// Empty Done = keep current, no error spam.
+		e.closeEditorDiscard()
+		return
+	}
+	fail := func(msg string) {
+		e.editErr = msg
+		e.render()
+	}
+	switch e.editIdx {
+	case 0: // Brightness: "80" or "80%" (0-100)
+		s := strings.TrimSuffix(val, "%")
+		fv, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+		if err != nil || fv < 0 || fv > 100 {
+			fail("use 0-100")
+			return
+		}
+		e.staged.Brightness = fv / 100
+	case 1: // Slideshow interval: Go duration, 5s..24h
+		d, err := time.ParseDuration(val)
+		if err != nil || d < 5*time.Second || d > 24*time.Hour {
+			fail("use 5s..24h (45s, 2m)")
+			return
+		}
+		e.staged.SlideshowInterval = d
+	case 2: // Transition
+		switch val {
+		case "none", "crossfade", "slide":
+			e.staged.Transition = val
+		default:
+			fail("none / crossfade / slide")
+			return
+		}
+	case 3: // Orientation: 0 | 90 | 180 | 270 (optional degree sign)
+		s := strings.TrimSuffix(val, "\u00b0")
+		switch strings.TrimSpace(s) {
+		case "0":
+			e.staged.Orientation = 0
+		case "90":
+			e.staged.Orientation = 90
+		case "180":
+			e.staged.Orientation = 180
+		case "270":
+			e.staged.Orientation = 270
+		default:
+			fail("0 / 90 / 180 / 270")
+			return
+		}
+	case 4, 5: // Sleep times: HH:MM
+		mins, ok := parseHMToMinutes(val)
+		if !ok {
+			fail("use HH:MM (07:00)")
+			return
+		}
+		if e.editIdx == 4 {
+			e.staged.SleepOn = mins
+		} else {
+			e.staged.SleepOff = mins
+		}
+	default:
+		e.closeEditorDiscard()
+		return
+	}
+	e.screen = ScreenSettings
+	e.editBuf, e.editErr = "", ""
+	e.render()
+}
+
+// parseHMToMinutes accepts "H:MM", "HH:MM", and a lone 0-23 hour.
+func parseHMToMinutes(s string) (int, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, false
+	}
+	parts := strings.Split(s, ":")
+	if len(parts) == 1 {
+		h, err := strconv.Atoi(parts[0])
+		if err != nil || h < 0 || h > 23 {
+			return 0, false
+		}
+		return h * 60, true
+	}
+	if len(parts) != 2 {
+		return 0, false
+	}
+	h, err1 := strconv.Atoi(strings.TrimSpace(parts[0]))
+	m, err2 := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err1 != nil || err2 != nil || h < 0 || h > 23 || m < 0 || m > 59 {
+		return 0, false
+	}
+	return h*60 + m, true
 }
 
 // applySettings runs the hold-protected apply: persist via the
