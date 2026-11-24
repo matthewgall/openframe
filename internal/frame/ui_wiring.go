@@ -307,15 +307,26 @@ func (f *Frame) touchComponent(ctx context.Context) error {
 	}
 
 	rec := touch.NewRecognizer(touch.Options{})
-	for s := range samples {
-		for _, g := range rec.Feed(s) {
-			select {
-			case f.ui.gestures <- g:
-			default: // UI is backed up: drop (transient input)
+	// Select, not range: an idle panel can leave the source channel
+	// open indefinitely between frames; the component must honour
+	// cancellation on its own (the SIGTERM shutdown hang this
+	// replaced: `for s := range samples` never returned).
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case s, ok := <-samples:
+			if !ok {
+				return nil
+			}
+			for _, g := range rec.Feed(s) {
+				select {
+				case f.ui.gestures <- g:
+				default: // UI is backed up: drop (transient input)
+				}
 			}
 		}
 	}
-	return nil
 }
 
 // touchWakeGrace is how long a recent touch holds off scheduled sleep:

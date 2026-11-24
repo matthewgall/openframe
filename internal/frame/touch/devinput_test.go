@@ -198,3 +198,31 @@ func TestDevInputRejectsRegularFile(t *testing.T) {
 		t.Fatal("expected an error for a regular file")
 	}
 }
+
+// TestStreamCancellableWithoutEvents is the production shutdown-hang
+// regression: an idle evdev node delivers no events, so a bare
+// blocking read parks the Stream goroutine across context
+// cancellation and the samples channel never closes. The pipe stands
+// in for the silent device (write end held open, nothing ever
+// written).
+func TestStreamCancellableWithoutEvents(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	d := &Device{path: "pipe", f: r}
+	ctx, cancel := context.WithCancel(context.Background())
+	ch := d.Stream(ctx)
+	time.Sleep(50 * time.Millisecond) // let the reader park in poll
+	cancel()
+	select {
+	case _, open := <-ch:
+		if open {
+			t.Fatal("channel delivered after cancel without a close")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stream ignored context cancellation while the device was idle (shutdown-hang regression)")
+	}
+	r.Close()
+}

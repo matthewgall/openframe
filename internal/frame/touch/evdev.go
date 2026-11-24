@@ -8,6 +8,7 @@
 package touch
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -150,9 +151,23 @@ func (d *Device) Close() error { return d.f.Close() }
 // readEvents blocks until at least one complete SYN_REPORT is seen and
 // returns the decoded raw events for that frame (plus any preceding
 // partial frame data). It reassembles across read() boundaries.
-func (d *Device) readFrame() ([]rawEvent, error) {
+//
+// The wait is poll-bounded, not a bare blocking read: an idle
+// touchscreen produces NO events, so a parked read() never observes
+// context cancellation — which hung production shutdowns whenever the
+// frame had not been touched recently (the reader goroutine stayed in
+// the syscall, the samples channel stayed open, and the component
+// loop range-looped it). 200 ms poll slices keep event latency
+// invisible and shutdown prompt.
+func (d *Device) readFrame(ctx context.Context) ([]rawEvent, error) {
 	pending := []byte{}
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if !d.waitReadable(200 * time.Millisecond) {
+			continue
+		}
 		buf := make([]byte, 256)
 		n, err := d.f.Read(buf)
 		if n > 0 {

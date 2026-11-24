@@ -19,7 +19,7 @@ func (d *Device) Stream(ctx context.Context) <-chan Sample {
 		defer close(ch)
 		var pos positionTracker
 		for {
-			evs, err := d.readFrame()
+			evs, err := d.readFrame(ctx)
 			if err != nil {
 				return
 			}
